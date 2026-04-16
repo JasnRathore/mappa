@@ -1,42 +1,43 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { ProjectSettings, TimelineElement, LocationPayload } from "../types";
 
-/**
- * TYPES & INTERFACES
- */
-interface MapLocation {
-  id: string;
-  name: string;
-  center: [number, number];
-  zoom: number;
-  type: string;
-  display_name: string;
-  color: string;
-  detail: number; // Controls layer visibility (0-100)
-  geojson?: any;
+interface Props {
+  project: ProjectSettings;
 }
 
-const MapEditor: React.FC = () => {
+const PIXELS_PER_FRAME = 2;
+const TRACK_HEIGHT = 60;
+const TRACK_COUNT = 4;
+
+const MapEditor: React.FC<Props> = ({ project }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
+  const mapCenterWrapper = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<MapLocation[]>([]);
+  const [searchResults, setSearchResults] = useState<LocationPayload[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [timelineItems, setTimelineItems] = useState<MapLocation[]>([]);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
-  /**
-   * 1. INITIALIZE VECTOR MAP
-   */
+  const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
+  const [activeElementId, setActiveElementId] = useState<string | null>(null);
+
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+  // store initial drag context
+  const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
+
+  // 1. INITIALIZE VECTOR MAP
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
 
-    // Using OpenFreeMap (Vector Tiles) - No API Key required for demo
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: "https://tiles.openfreemap.org/styles/positron", // A clean vector style
+      style: "https://tiles.openfreemap.org/styles/positron",
       center: [0, 20],
       zoom: 1.5,
       antialias: true,
@@ -44,8 +45,6 @@ const MapEditor: React.FC = () => {
 
     map.current.on("load", () => {
       if (!map.current) return;
-
-      // Add our custom city-highlight source
       map.current.addSource("city-area", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -70,132 +69,315 @@ const MapEditor: React.FC = () => {
     };
   }, []);
 
-  /**
-   * 2. LAYER VISIBILITY LOGIC
-   * We filter layers based on the 'detail' slider
-   */
-  const syncLayerDetail = (detail: number) => {
-    if (!map.current) return;
-    const style = map.current.getStyle();
-    if (!style || !style.layers) return;
+  // Update map container on resize
+  useEffect(() => {
+    const handleResize = () => map.current?.resize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-    style.layers.forEach((layer) => {
-      // Define what constitutes "extra detail" based on common layer naming
-      const isLabel = layer.id.includes("label") || layer.id.includes("place");
-      const isTransit =
-        layer.id.includes("rail") ||
-        layer.id.includes("transit") ||
-        layer.id.includes("airport");
-      const isSmallRoad =
-        layer.id.includes("road") && !layer.id.includes("motorway");
-      const isBuilding = layer.id.includes("building");
+  // 2. PLAYBACK LOOP
+  useEffect(() => {
+    if (!isPlaying) return;
 
-      let visible = "visible";
+    let lastTime = performance.now();
+    let frameId: number;
+    const msPerFrame = 1000 / project.fps;
 
-      // Logic Gates for detail level
-      if (detail < 30) {
-        // LOW DETAIL: Hide almost everything but land/water
-        if (isLabel || isTransit || isSmallRoad || isBuilding) visible = "none";
-      } else if (detail < 70) {
-        // MID DETAIL: Hide small streets and buildings
-        if (isSmallRoad || isBuilding) visible = "none";
+    const loop = (time: number) => {
+      const delta = time - lastTime;
+      if (delta >= msPerFrame) {
+        setCurrentFrame((prev) => {
+          const nextFrame = prev + 1;
+          if (nextFrame >= project.durationFrames) {
+            setIsPlaying(false);
+            return prev;
+          }
+          return nextFrame;
+        });
+        lastTime = time - (delta % msPerFrame);
       }
+      frameId = requestAnimationFrame(loop);
+    };
+    frameId = requestAnimationFrame(loop);
 
-      map.current?.setLayoutProperty(layer.id, "visibility", visible);
-    });
-  };
+    return () => cancelAnimationFrame(frameId);
+  }, [isPlaying, project.fps, project.durationFrames]);
 
-  /**
-   * 3. SEARCH & SYNC
-   */
+  // 3. MAP STATE UPDATE
+  const updateMapState = useCallback(() => {
+    if (!map.current) return;
+
+    const activeElements = timelineElements.filter(
+      (el) => currentFrame >= el.startFrame && currentFrame < el.startFrame + el.durationFrames
+    );
+
+    const activeLocation = activeElements
+      .filter((el) => el.type === "location")
+      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
+
+    const activeEffect = activeElements
+      .filter((el) => el.type === "effect_detail")
+      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
+
+    if (activeLocation && activeLocation.locationPayload) {
+      const loc = activeLocation.locationPayload;
+      map.current.flyTo({ center: loc.center, zoom: loc.zoom, duration: 800 });
+
+      if (map.current.isStyleLoaded()) {
+        const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
+        if (source) {
+          source.setData({
+            type: "Feature",
+            properties: { color: loc.color },
+            geometry: loc.geojson || { type: "Point", coordinates: loc.center },
+          });
+        }
+      }
+    } else if (map.current.isStyleLoaded()) {
+      const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
+      if (source) source.setData({ type: "FeatureCollection", features: [] });
+    }
+
+    const detailLevel = activeEffect?.effectPayload?.detailLevel ?? 100;
+
+    if (map.current.isStyleLoaded()) {
+      const style = map.current.getStyle();
+      if (style && style.layers) {
+        style.layers.forEach((layer) => {
+          const isLabel = layer.id.includes("label") || layer.id.includes("place");
+          const isTransit =
+            layer.id.includes("rail") ||
+            layer.id.includes("transit") ||
+            layer.id.includes("airport");
+          const isSmallRoad = layer.id.includes("road") && !layer.id.includes("motorway");
+          const isBuilding = layer.id.includes("building");
+
+          let visible = "visible";
+          if (detailLevel < 30) {
+            if (isLabel || isTransit || isSmallRoad || isBuilding) visible = "none";
+          } else if (detailLevel < 70) {
+            if (isSmallRoad || isBuilding) visible = "none";
+          }
+
+          map.current?.setLayoutProperty(layer.id, "visibility", visible);
+        });
+      }
+    }
+  }, [currentFrame, timelineElements]);
+
+  useEffect(() => {
+    updateMapState();
+  }, [updateMapState]);
+
+
+  // 4. TIMELINE INTERACTIONS
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
-
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&polygon_geojson=1`,
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&polygon_geojson=1`
       );
       const data = await response.json();
-
-      const formatted: MapLocation[] = data.map((item: any) => ({
-        id: item.place_id.toString() + Math.random(),
-        name: item.display_name.split(",")[0],
-        display_name: item.display_name,
-        center: [parseFloat(item.lon), parseFloat(item.lat)],
-        zoom: ["city", "town", "village", "suburb"].includes(item.type)
-          ? 12
-          : 5,
-        type: item.type,
+      const formatted: LocationPayload[] = data.map((item: Record<string, unknown>) => ({
+        id: (item.place_id as number).toString() + Math.random(),
+        name: (item.display_name as string).split(",")[0],
+        display_name: item.display_name as string,
+        center: [parseFloat(item.lon as string), parseFloat(item.lat as string)],
+        zoom: ["city", "town", "village", "suburb"].includes(item.type as string) ? 12 : 5,
+        type: item.type as string,
         color: "#f97316",
-        detail: 100, // Default to max detail
-        geojson: item.geojson,
+        geojson: item.geojson as Record<string, unknown>,
       }));
-
       setSearchResults(formatted);
     } catch (err) {
-      console.error("Search failed:", err);
+      console.error(err);
     } finally {
       setIsSearching(false);
     }
   };
 
-  const focusLocation = (loc: MapLocation, index: number) => {
-    setActiveIndex(index);
-    map.current?.flyTo({ center: loc.center, zoom: loc.zoom, duration: 2000 });
-
-    // Update city boundary
-    if (map.current?.isStyleLoaded()) {
-      const source = map.current.getSource(
-        "city-area",
-      ) as maplibregl.GeoJSONSource;
-      if (source) {
-        source.setData({
-          type: "Feature",
-          properties: { color: loc.color },
-          geometry: loc.geojson || { type: "Point", coordinates: loc.center },
-        });
-      }
-      syncLayerDetail(loc.detail);
-    }
-  };
-
-  const updateActiveClip = (updates: Partial<MapLocation>) => {
-    if (activeIndex === null) return;
-    const updatedItems = [...timelineItems];
-    const newItem = { ...updatedItems[activeIndex], ...updates };
-    updatedItems[activeIndex] = newItem;
-    setTimelineItems(updatedItems);
-
-    if (updates.detail !== undefined) syncLayerDetail(updates.detail);
-    if (updates.zoom !== undefined) map.current?.setZoom(updates.zoom);
-    if (updates.color) {
-      const source = map.current?.getSource(
-        "city-area",
-      ) as maplibregl.GeoJSONSource;
-      if (source)
-        source.setData({
-          type: "Feature",
-          properties: { color: updates.color },
-          geometry: newItem.geojson,
-        });
-    }
-  };
-
-  const onDrop = (e: React.DragEvent) => {
+  const handleTimelineDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (!timelineRef.current) return;
+
+    const rect = timelineRef.current.getBoundingClientRect();
+    const scrollLeft = timelineRef.current.scrollLeft;
+    // Account for playhead area + tracks container padding if any.
+    // Assuming tracks are simple absolute positioned elements.
+    const dropX = e.clientX - rect.left + scrollLeft;
+    const dropY = e.clientY - rect.top; // Relative to timelineRef
+
+    let targetTrack = Math.floor((dropY - 30) / TRACK_HEIGHT); // subtract header space if needed
+    if (targetTrack < 0) targetTrack = 0;
+    if (targetTrack >= TRACK_COUNT) targetTrack = TRACK_COUNT - 1;
+
+    let startFrame = Math.floor(dropX / PIXELS_PER_FRAME);
+    if (startFrame < 0) startFrame = 0;
+
     const data = e.dataTransfer.getData("application/json");
     if (data) {
-      const loc = JSON.parse(data) as MapLocation;
-      setTimelineItems((prev) => [...prev, loc]);
+      try {
+        const payload = JSON.parse(data);
+        // It could be from search pool
+        if (payload && payload.type) {
+          const newEl: TimelineElement = {
+            id: `clip-${Date.now()}`,
+            name: payload.name || "Location",
+            type: "location",
+            trackIndex: targetTrack,
+            startFrame,
+            durationFrames: project.fps * 5,
+            locationPayload: payload,
+          };
+          setTimelineElements(prev => [...prev, newEl]);
+        }
+      } catch (err) {
+        console.warn("Dropped payload not a location", err);
+      }
     }
+  };
+
+  const addDetailEffect = () => {
+    const newEl: TimelineElement = {
+      id: `effect-${Date.now()}`,
+      name: "Detail Overlay",
+      type: "effect_detail",
+      trackIndex: 0, // Put on top track usually
+      startFrame: currentFrame,
+      durationFrames: project.fps * 5,
+      effectPayload: { detailLevel: 50 },
+    };
+    setTimelineElements(prev => [...prev, newEl]);
+  };
+
+  // Block dragging logic
+  const handleBlockMouseDown = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setActiveElementId(id);
+    const el = timelineElements.find(t => t.id === id);
+    if (!el) return;
+
+    setDraggingElementId(id);
+    dragState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origStart: el.startFrame,
+      origTrack: el.trackIndex
+    };
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!draggingElementId || !dragState.current) return;
+      const { startX, startY, origStart, origTrack } = dragState.current;
+
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      let newTrack = origTrack + Math.round(deltaY / TRACK_HEIGHT);
+      if (newTrack < 0) newTrack = 0;
+      if (newTrack >= TRACK_COUNT) newTrack = TRACK_COUNT - 1;
+
+      let newStart = origStart + Math.round(deltaX / PIXELS_PER_FRAME);
+      if (newStart < 0) newStart = 0;
+
+      setTimelineElements(prev => prev.map(el =>
+        el.id === draggingElementId
+          ? { ...el, startFrame: newStart, trackIndex: newTrack }
+          : el
+      ));
+    };
+
+    const handleMouseUp = () => {
+      setDraggingElementId(null);
+      dragState.current = null;
+    };
+
+    if (draggingElementId) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingElementId]);
+
+
+  const updateActiveElement = (updates: Partial<TimelineElement>) => {
+    setTimelineElements(prev => prev.map(el =>
+      el.id === activeElementId ? { ...el, ...updates } : el
+    ));
+  };
+
+  const updateActivePayload = (payloadUpdates: Record<string, unknown>) => {
+    setTimelineElements(prev => prev.map(el => {
+      if (el.id !== activeElementId) return el;
+      if (el.type === "location" && el.locationPayload) {
+        return { ...el, locationPayload: { ...el.locationPayload, ...payloadUpdates } };
+      }
+      if (el.type === "effect_detail" && el.effectPayload) {
+        return { ...el, effectPayload: { ...el.effectPayload, ...payloadUpdates } };
+      }
+      return el;
+    }));
+  };
+
+  const activeElement = timelineElements.find(e => e.id === activeElementId);
+
+  // Playhead scrub drag
+  const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
+  const handleTimelineHeaderMouseDown = (e: React.MouseEvent) => {
+    setIsDraggingPlayhead(true);
+    updatePlayheadFromMouse(e.clientX);
+  };
+
+  const updatePlayheadFromMouse = useCallback((clientX: number) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const x = clientX - rect.left + scrollLeft;
+    let frame = Math.floor(x / PIXELS_PER_FRAME);
+    if (frame < 0) frame = 0;
+    if (frame >= project.durationFrames) frame = project.durationFrames - 1;
+    setCurrentFrame(frame);
+  }, [project.durationFrames]);
+
+  useEffect(() => {
+    const handleMouseUp = () => setIsDraggingPlayhead(false);
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingPlayhead) {
+        updatePlayheadFromMouse(e.clientX);
+      }
+    };
+    if (isDraggingPlayhead) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingPlayhead, updatePlayheadFromMouse]);
+
+
+  const formatTimecode = (frames: number) => {
+    const totalSecs = frames / project.fps;
+    const mins = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+    const secs = Math.floor(totalSecs % 60).toString().padStart(2, '0');
+    const ff = Math.floor(frames % project.fps).toString().padStart(2, '0');
+    return `${mins}:${secs}:${ff}`;
   };
 
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-300 overflow-hidden font-sans">
       <div className="flex flex-1 min-h-0">
-        {/* LEFT BAR */}
-        <aside className="w-72 border-r border-zinc-800 bg-zinc-900 flex flex-col z-20">
+
+        {/* LEFT BAR: MEDIA POOL */}
+        <aside className="w-72 border-r border-zinc-800 bg-zinc-900 flex flex-col z-20 shrink-0">
           <div className="p-4 border-b border-zinc-800">
             <h2 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-4">
               Media Pool
@@ -203,36 +385,41 @@ const MapEditor: React.FC = () => {
             <div className="flex gap-2">
               <input
                 className="flex-1 bg-black/40 border border-zinc-700 rounded px-2 py-1.5 text-xs outline-none focus:border-orange-500"
-                placeholder="Search..."
+                placeholder="Search location..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
               <button
                 onClick={handleSearch}
-                className="bg-zinc-800 px-3 rounded text-[10px] font-bold"
+                className="bg-zinc-800 px-3 rounded text-[10px] font-bold hover:bg-zinc-700"
               >
-                FIND
+                {isSearching ? "..." : "FIND"}
+              </button>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-zinc-800">
+              <button
+                onClick={addDetailEffect}
+                className="w-full py-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded text-xs font-bold hover:bg-indigo-500/20"
+              >
+                + Detail Effect Overlay
               </button>
             </div>
           </div>
+
           <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
             {searchResults.map((loc) => (
               <div
                 key={loc.id}
                 draggable
                 onDragStart={(e) =>
-                  e.dataTransfer.setData(
-                    "application/json",
-                    JSON.stringify(loc),
-                  )
+                  e.dataTransfer.setData("application/json", JSON.stringify(loc))
                 }
                 className="p-3 bg-zinc-800/50 border border-zinc-700 rounded-md cursor-grab active:cursor-grabbing hover:border-orange-500/50"
               >
                 <div className="flex justify-between items-center mb-1">
-                  <span className="text-xs font-bold text-zinc-200 truncate">
-                    {loc.name}
-                  </span>
+                  <span className="text-xs font-bold text-zinc-200 truncate">{loc.name}</span>
                   <span className="text-[8px] px-1 bg-orange-500/10 text-orange-400 rounded border border-orange-500/20">
                     {loc.type}
                   </span>
@@ -246,156 +433,243 @@ const MapEditor: React.FC = () => {
         </aside>
 
         {/* MAP CENTER */}
-        <main className="flex-1 relative bg-zinc-900 overflow-hidden">
-          <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
-          <div className="absolute top-4 left-4 z-10 bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 text-[10px] font-mono">
-            {activeIndex !== null
-              ? `DATA_DENSITY: ${timelineItems[activeIndex].detail}%`
-              : "READY"}
+        <main className="flex-1 relative bg-zinc-950 flex flex-col p-6 items-center justify-center overflow-hidden">
+          <div className="absolute top-4 left-6 z-10 flex gap-4">
+            <div className="bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 text-[10px] font-mono shadow-xl text-zinc-400">
+              {project.width}x{project.height} @ {project.fps}FPS
+            </div>
+          </div>
+
+          <div
+            ref={mapCenterWrapper}
+            className="relative border border-zinc-800 shadow-2xl rounded overflow-hidden"
+            style={{
+              aspectRatio: project.width / project.height,
+              width: '100%',
+              maxHeight: '100%',
+              maxWidth: project.width > project.height ? '100%' : `${100 / (project.height / project.width)}vh`
+            }}
+          >
+            <div ref={mapContainer} className="absolute inset-0 w-full h-full bg-zinc-900" />
           </div>
         </main>
 
-        {/* RIGHT BAR */}
-        <aside className="w-80 border-l border-zinc-800 bg-zinc-900 p-4 z-20">
-          <h2 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-6">
-            Inspector
-          </h2>
-          {activeIndex !== null ? (
-            <div className="space-y-6">
-              <section>
-                <label className="text-[9px] text-orange-500 font-bold block mb-2 uppercase">
-                  Map Topology
-                </label>
-                <div className="bg-black/30 p-3 rounded border border-zinc-800 space-y-4">
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-[8px] text-zinc-500">
-                        FEATURE_DETAIL
-                      </span>
-                      <span className="text-[10px] font-mono text-orange-500">
-                        {timelineItems[activeIndex].detail < 33
-                          ? "LOW"
-                          : timelineItems[activeIndex].detail < 66
-                            ? "MID"
-                            : "HIGH"}
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={timelineItems[activeIndex].detail}
-                      onChange={(e) =>
-                        updateActiveClip({ detail: parseInt(e.target.value) })
-                      }
-                      className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                    />
-                    <div className="flex justify-between mt-1 text-[7px] text-zinc-600 font-mono">
-                      <span>MINIMAL</span>
-                      <span>HYBRID</span>
-                      <span>COMPLEX</span>
-                    </div>
-                  </div>
+        {/* RIGHT BAR: INSPECTOR */}
+        <aside className="w-80 border-l border-zinc-800 bg-zinc-900 flex flex-col z-20 shrink-0">
+          <div className="p-4 border-b border-zinc-800">
+            <h2 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+              Inspector
+            </h2>
+          </div>
+          <div className="p-4 flex-1 overflow-y-auto">
+            {activeElement ? (
+              <div className="space-y-6">
 
-                  <div>
-                    <div className="text-[8px] text-zinc-500 mb-2">
-                      HIGHLIGHT_COLOR
-                    </div>
-                    <div className="flex gap-3 items-center">
+                {/* TIMING */}
+                <section>
+                  <label className="text-[9px] text-zinc-500 font-bold block mb-2 uppercase">
+                    Timing Controls
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[8px] text-zinc-500">START FRAME</span>
                       <input
-                        type="color"
-                        value={timelineItems[activeIndex].color}
-                        onChange={(e) =>
-                          updateActiveClip({ color: e.target.value })
-                        }
-                        className="w-10 h-6 bg-transparent border-none cursor-pointer"
+                        type="number"
+                        value={activeElement.startFrame}
+                        onChange={(e) => updateActiveElement({ startFrame: parseInt(e.target.value) || 0 })}
+                        className="w-full bg-black/30 border border-zinc-700 text-xs px-2 py-1 rounded"
                       />
-                      <span className="text-xs font-mono">
-                        {timelineItems[activeIndex].color.toUpperCase()}
-                      </span>
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[8px] text-zinc-500">DURATION (Frames)</span>
+                      <input
+                        type="number"
+                        value={activeElement.durationFrames}
+                        onChange={(e) => updateActiveElement({ durationFrames: parseInt(e.target.value) || 1 })}
+                        className="w-full bg-black/30 border border-zinc-700 text-xs px-2 py-1 rounded"
+                      />
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
 
-              <section>
-                <label className="text-[9px] text-zinc-500 font-bold block mb-2 uppercase">
-                  Camera Settings
-                </label>
-                <div className="bg-zinc-800 p-3 rounded">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-[8px] text-zinc-500">ZOOM_LEVEL</span>
-                    <span className="text-[10px] font-mono text-orange-500">
-                      {timelineItems[activeIndex].zoom.toFixed(1)}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="20"
-                    step="0.1"
-                    value={timelineItems[activeIndex].zoom}
-                    onChange={(e) =>
-                      updateActiveClip({ zoom: parseFloat(e.target.value) })
-                    }
-                    className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                  />
-                </div>
-              </section>
-            </div>
-          ) : (
-            <div className="h-40 flex items-center justify-center border border-dashed border-zinc-800 rounded text-[10px] text-zinc-600 uppercase text-center px-10">
-              Drag a location to the timeline and select it to begin editing
-            </div>
-          )}
+                {/* LOCATION PAYLOAD */}
+                {activeElement.type === "location" && activeElement.locationPayload && (
+                  <section>
+                    <label className="text-[9px] text-orange-500 font-bold block mb-2 uppercase">
+                      Map Topology
+                    </label>
+                    <div className="bg-black/30 p-3 rounded border border-zinc-800 space-y-4">
+                      <div>
+                        <div className="text-[8px] text-zinc-500 mb-2">HIGHLIGHT_COLOR</div>
+                        <div className="flex gap-3 items-center">
+                          <input
+                            type="color"
+                            value={activeElement.locationPayload.color}
+                            onChange={(e) => updateActivePayload({ color: e.target.value })}
+                            className="w-10 h-6 bg-transparent border-none cursor-pointer"
+                          />
+                          <span className="text-xs font-mono">
+                            {activeElement.locationPayload.color.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-[8px] text-zinc-500">ZOOM_LEVEL</span>
+                          <span className="text-[10px] font-mono text-orange-500">
+                            {activeElement.locationPayload.zoom.toFixed(1)}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1" max="20" step="0.1"
+                          value={activeElement.locationPayload.zoom}
+                          onChange={(e) => updateActivePayload({ zoom: parseFloat(e.target.value) })}
+                          className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                        />
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* EFFECT PAYLOAD */}
+                {activeElement.type === "effect_detail" && activeElement.effectPayload && (
+                  <section>
+                    <label className="text-[9px] text-indigo-500 font-bold block mb-2 uppercase">
+                      Effect: World Detail
+                    </label>
+                    <div className="bg-black/30 p-3 rounded border border-zinc-800 space-y-4">
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-[8px] text-zinc-500">DENSITY (%)</span>
+                          <span className="text-[10px] font-mono text-indigo-400">
+                            {activeElement.effectPayload.detailLevel}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0" max="100" step="1"
+                          value={activeElement.effectPayload.detailLevel}
+                          onChange={(e) => updateActivePayload({ detailLevel: parseInt(e.target.value) })}
+                          className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                        />
+                        <div className="flex justify-between mt-1 text-[7px] text-zinc-600 font-mono">
+                          <span>WATER ONLY</span>
+                          <span>MODERATE</span>
+                          <span>ALL ROADS</span>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </div>
+            ) : (
+              <div className="h-40 flex items-center justify-center border border-dashed border-zinc-800 rounded text-[10px] text-zinc-600 uppercase text-center px-10">
+                Select a clip on the timeline to inspect
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 
-      {/* BOTTOM: Timeline */}
-      <footer
-        className="h-64 border-t-2 border-zinc-800 bg-zinc-950 flex flex-col z-30"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={onDrop}
-      >
-        <div className="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center px-4">
-          <div className="flex gap-2 items-center">
-            <div className="w-2 h-2 rounded-full bg-orange-600 animate-pulse" />
-            <span className="text-[9px] font-bold tracking-[0.2em] text-zinc-400">
-              SESSION_LIVE
-            </span>
+      {/* BOTTOM: Timeline Area */}
+      <footer className="h-72 border-t border-zinc-800 bg-zinc-900 flex flex-col z-30 shrink-0 select-none">
+        {/* Timeline Header Toolbar */}
+        <div className="h-12 bg-zinc-950 border-b border-zinc-800 flex items-center px-4 justify-between">
+          <div className="flex gap-4 items-center">
+            <button
+              onClick={() => setIsPlaying(!isPlaying)}
+              className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${isPlaying ? 'bg-orange-500 text-black' : 'bg-zinc-800 hover:bg-zinc-700 text-white'}`}
+            >
+              {isPlaying ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+              )}
+            </button>
+            <div className="font-mono text-sm text-zinc-300 bg-black/50 px-3 py-1 rounded border border-zinc-800">
+              {formatTimecode(currentFrame)}
+            </div>
+            <div className="text-[10px] font-mono text-zinc-500">
+              [ {currentFrame} / {project.durationFrames} ]
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-x-auto p-6 flex items-start gap-1 bg-[linear-gradient(to_right,#18181b_1px,transparent_1px)] bg-[size:100px_100%]">
-          {timelineItems.map((item, idx) => (
+        {/* Timeline Track Area */}
+        <div
+          className="relative flex-1 overflow-x-auto overflow-y-hidden timeline-bg"
+          ref={timelineRef}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleTimelineDrop}
+        >
+          {/* Timeline Header Scrubber Area */}
+          <div
+            className="sticky top-0 h-6 bg-zinc-950/80 border-b border-zinc-800 z-10 cursor-col-resize"
+            onMouseDown={handleTimelineHeaderMouseDown}
+          >
+            {/* Draw some ticks in background using inline css or just simple grid */}
             <div
-              key={item.id}
-              onClick={() => focusLocation(item, idx)}
-              className={`relative flex-shrink-0 w-64 h-24 rounded-sm border-t-4 transition-all cursor-pointer group
-                ${activeIndex === idx ? "bg-orange-500/10 border-orange-500 shadow-lg shadow-orange-500/5" : "bg-zinc-900/80 border-zinc-700"}`}
+              className="absolute inset-0 opacity-20 pointer-events-none"
+              style={{ backgroundImage: `linear-gradient(to right, #ffffff 1px, transparent 1px)`, backgroundSize: `${project.fps * PIXELS_PER_FRAME}px 100%` }}
+            />
+          </div>
+
+          {/* Tracks Container */}
+          <div className="relative pt-2" style={{ width: Math.max(project.durationFrames * PIXELS_PER_FRAME, window.innerWidth), height: TRACK_COUNT * TRACK_HEIGHT }}>
+            {/* Playhead Line */}
+            <div
+              className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-20 pointer-events-none"
+              style={{ left: currentFrame * PIXELS_PER_FRAME }}
             >
-              <div className="p-3">
-                <span
-                  className={`text-[9px] font-bold ${activeIndex === idx ? "text-orange-400" : "text-zinc-500"}`}
-                >
-                  CLIP_0{idx + 1}
-                </span>
-                <div className="text-sm font-medium text-zinc-200 mt-1 truncate">
-                  {item.name}
-                </div>
-                <div className="mt-4 flex h-1.5 w-full bg-black/40 rounded-full overflow-hidden">
-                  <div
-                    style={{
-                      backgroundColor: item.color,
-                      width: `${item.detail}%`,
-                    }}
-                    className="h-full opacity-60 transition-all duration-500"
-                  />
-                </div>
-              </div>
+              <div className="absolute top-[-24px] left-[-4px] w-0 h-0 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-red-500" />
             </div>
-          ))}
+
+            {/* Draw Track Separators */}
+            {Array.from({ length: TRACK_COUNT }).map((_, i) => (
+              <div
+                key={i}
+                className="absolute w-full border-b border-zinc-800 pointer-events-none"
+                style={{ top: i * TRACK_HEIGHT, height: TRACK_HEIGHT }}
+              >
+                <span className="absolute left-2 top-1 text-[8px] text-zinc-600 font-mono">TRACK 0{i + 1}</span>
+              </div>
+            ))}
+
+            {/* Elements */}
+            {timelineElements.map((el) => {
+              const isSelected = activeElementId === el.id;
+              const left = el.startFrame * PIXELS_PER_FRAME;
+              const width = el.durationFrames * PIXELS_PER_FRAME;
+              const top = el.trackIndex * TRACK_HEIGHT + 4; // 4px padding
+
+              const baseColor = el.type === "location" ? "border-orange-500/50 bg-orange-500/10" : "border-indigo-500/50 bg-indigo-500/10";
+              const selColor = el.type === "location" ? "border-orange-400 bg-orange-500/30" : "border-indigo-400 bg-indigo-500/30";
+
+              return (
+                <div
+                  key={el.id}
+                  onMouseDown={(e) => handleBlockMouseDown(e, el.id)}
+                  className={`absolute h-[52px] border rounded text-[10px] p-2 overflow-hidden cursor-grab active:cursor-grabbing hover:brightness-125 transition-colors z-10 
+                          ${isSelected ? selColor : baseColor}
+                       `}
+                  style={{ left, width, top }}
+                >
+                  <div className={`font-bold truncate ${el.type === "location" ? "text-orange-400" : "text-indigo-400"}`}>
+                    {el.name}
+                  </div>
+                  {el.type === "effect_detail" && el.effectPayload && (
+                    <div className="text-[8px] text-zinc-400 mt-1">Detail: {el.effectPayload.detailLevel}%</div>
+                  )}
+                  {el.type === "location" && el.locationPayload && (
+                    <div className="mt-1 flex w-full h-1 bg-black/40 rounded-full overflow-hidden">
+                      <div className="h-full opacity-60" style={{ backgroundColor: el.locationPayload.color, width: '100%' }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </footer>
     </div>
