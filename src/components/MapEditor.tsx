@@ -28,6 +28,8 @@ const MapEditor: React.FC<Props> = ({ project }) => {
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+  const lastActiveLocationId = useRef<string | null>(null);
+  const lastDetailLevel = useRef<number | null>(null);
   // store initial drag context
   const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
 
@@ -120,48 +122,114 @@ const MapEditor: React.FC<Props> = ({ project }) => {
       .filter((el) => el.type === "effect_detail")
       .sort((a, b) => b.trackIndex - a.trackIndex)[0];
 
-    if (activeLocation && activeLocation.locationPayload) {
-      const loc = activeLocation.locationPayload;
-      map.current.flyTo({ center: loc.center, zoom: loc.zoom, duration: 800 });
+    const locKey = activeLocation ? `${activeLocation.id}-${activeLocation.locationPayload?.zoom}-${activeLocation.locationPayload?.bearing}-${activeLocation.locationPayload?.pitch}-${activeLocation.locationPayload?.transition}-${activeLocation.locationPayload?.color}-${JSON.stringify(activeLocation.locationPayload?.center)}` : null;
 
-      if (map.current.isStyleLoaded()) {
-        const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
-        if (source) {
-          source.setData({
-            type: "Feature",
-            properties: { color: loc.color },
-            geometry: loc.geojson || { type: "Point", coordinates: loc.center },
-          });
+    if (locKey !== lastActiveLocationId.current) {
+      lastActiveLocationId.current = locKey;
+
+      if (activeLocation && activeLocation.locationPayload) {
+        const loc = activeLocation.locationPayload;
+        const transition = loc.transition || "fly";
+        
+        // Calculate transition duration
+        // Prefer explicit transitionMS, otherwise default to 2000ms or remaining clip duration
+        const clipMs = (activeLocation.durationFrames / project.fps) * 1000;
+        const duration = loc.transitionMS || Math.min(2000, clipMs);
+
+        const options = {
+          center: loc.center,
+          zoom: loc.zoom,
+          bearing: loc.bearing || 0,
+          pitch: loc.pitch || 0,
+          duration: duration,
+          essential: true
+        };
+
+        switch (transition) {
+          case "jump":
+            map.current.jumpTo({ 
+              center: loc.center, 
+              zoom: loc.zoom, 
+              bearing: loc.bearing || 0, 
+              pitch: loc.pitch || 0 
+            });
+            break;
+          case "ease":
+            map.current.easeTo(options);
+            break;
+          case "pan":
+            map.current.panTo(loc.center, { duration, essential: true });
+            break;
+          case "rotate":
+            // Enforce absolute bearing from payload
+            map.current.easeTo(options);
+            break;
+          case "tilt":
+            // Enforce absolute pitch from payload
+            map.current.easeTo(options);
+            break;
+          case "zoom_in":
+            map.current.flyTo({ ...options, zoom: loc.zoom + 1 });
+            break;
+          case "zoom_out":
+            map.current.flyTo({ ...options, zoom: loc.zoom - 1 });
+            break;
+          case "fit_bounds":
+            if (loc.geojson && loc.geojson.type === "Feature") {
+               // Simple bounding box calculation if possible, or just fly to the defined zoom
+               map.current.flyTo(options);
+            } else {
+               map.current.flyTo(options);
+            }
+            break;
+          case "fly":
+          default:
+            map.current.flyTo(options);
+            break;
         }
+
+        if (map.current.isStyleLoaded()) {
+          const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
+          if (source) {
+            source.setData({
+              type: "Feature",
+              properties: { color: loc.color || "#f97316" },
+              geometry: loc.geojson || { type: "Point", coordinates: loc.center },
+            });
+          }
+        }
+      } else if (!activeLocation && map.current.isStyleLoaded()) {
+        const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
+        if (source) source.setData({ type: "FeatureCollection", features: [] });
       }
-    } else if (map.current.isStyleLoaded()) {
-      const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
-      if (source) source.setData({ type: "FeatureCollection", features: [] });
     }
 
     const detailLevel = activeEffect?.effectPayload?.detailLevel ?? 100;
 
-    if (map.current.isStyleLoaded()) {
-      const style = map.current.getStyle();
-      if (style && style.layers) {
-        style.layers.forEach((layer) => {
-          const isLabel = layer.id.includes("label") || layer.id.includes("place");
-          const isTransit =
-            layer.id.includes("rail") ||
-            layer.id.includes("transit") ||
-            layer.id.includes("airport");
-          const isSmallRoad = layer.id.includes("road") && !layer.id.includes("motorway");
-          const isBuilding = layer.id.includes("building");
+    if (detailLevel !== lastDetailLevel.current) {
+      lastDetailLevel.current = detailLevel;
+      if (map.current.isStyleLoaded()) {
+        const style = map.current.getStyle();
+        if (style && style.layers) {
+          style.layers.forEach((layer) => {
+            const isLabel = layer.id.includes("label") || layer.id.includes("place");
+            const isTransit =
+              layer.id.includes("rail") ||
+              layer.id.includes("transit") ||
+              layer.id.includes("airport");
+            const isSmallRoad = layer.id.includes("road") && !layer.id.includes("motorway");
+            const isBuilding = layer.id.includes("building");
 
-          let visible = "visible";
-          if (detailLevel < 30) {
-            if (isLabel || isTransit || isSmallRoad || isBuilding) visible = "none";
-          } else if (detailLevel < 70) {
-            if (isSmallRoad || isBuilding) visible = "none";
-          }
+            let visible = "visible";
+            if (detailLevel < 30) {
+              if (isLabel || isTransit || isSmallRoad || isBuilding) visible = "none";
+            } else if (detailLevel < 70) {
+              if (isSmallRoad || isBuilding) visible = "none";
+            }
 
-          map.current?.setLayoutProperty(layer.id, "visibility", visible);
-        });
+            map.current?.setLayoutProperty(layer.id, "visibility", visible);
+          });
+        }
       }
     }
   }, [currentFrame, timelineElements]);
@@ -187,6 +255,10 @@ const MapEditor: React.FC<Props> = ({ project }) => {
         display_name: item.display_name as string,
         center: [parseFloat(item.lon as string), parseFloat(item.lat as string)],
         zoom: ["city", "town", "village", "suburb"].includes(item.type as string) ? 12 : 5,
+        bearing: 0,
+        pitch: 0,
+        transition: "fly",
+        transitionMS: 2000,
         type: item.type as string,
         color: "#f97316",
         geojson: item.geojson as Record<string, unknown>,
@@ -326,6 +398,36 @@ const MapEditor: React.FC<Props> = ({ project }) => {
     }));
   };
 
+  const captureMapState = () => {
+    if (!map.current || !activeElementId || activeElement?.type !== "location") return;
+    const center = map.current.getCenter();
+    updateActivePayload({
+      center: [center.lng, center.lat],
+      zoom: map.current.getZoom(),
+      bearing: map.current.getBearing(),
+      pitch: map.current.getPitch(),
+    });
+  };
+
+  const deleteActiveElement = useCallback(() => {
+    if (!activeElementId) return;
+    setTimelineElements((prev) => prev.filter((el) => el.id !== activeElementId));
+    setActiveElementId(null);
+  }, [activeElementId]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Backspace" || e.key === "Delete") {
+        if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
+            return;
+        }
+        deleteActiveElement();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [deleteActiveElement]);
+
   const activeElement = timelineElements.find(e => e.id === activeElementId);
 
   // Playhead scrub drag
@@ -456,10 +558,18 @@ const MapEditor: React.FC<Props> = ({ project }) => {
 
         {/* RIGHT BAR: INSPECTOR */}
         <aside className="w-80 border-l border-zinc-800 bg-zinc-900 flex flex-col z-20 shrink-0">
-          <div className="p-4 border-b border-zinc-800">
+          <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
             <h2 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
               Inspector
             </h2>
+            {activeElement && (
+              <button 
+                onClick={deleteActiveElement}
+                className="text-[9px] font-bold text-red-500 hover:text-white hover:bg-red-500 px-2 py-1 rounded transition-colors"
+              >
+                DELETE
+              </button>
+            )}
           </div>
           <div className="p-4 flex-1 overflow-y-auto">
             {activeElement ? (
@@ -500,7 +610,88 @@ const MapEditor: React.FC<Props> = ({ project }) => {
                     </label>
                     <div className="bg-black/30 p-3 rounded border border-zinc-800 space-y-4">
                       <div>
-                        <div className="text-[8px] text-zinc-500 mb-2">HIGHLIGHT_COLOR</div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[8px] text-zinc-500">TRANSITION</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <select
+                            value={activeElement.locationPayload.transition || "fly"}
+                            onChange={(e) => updateActivePayload({ transition: e.target.value })}
+                            className="flex-1 bg-zinc-800 border border-zinc-700 text-xs px-2 py-1 rounded outline-none text-zinc-200"
+                          >
+                            <option value="fly">Fly</option>
+                            <option value="ease">Ease</option>
+                            <option value="jump">Jump</option>
+                            <option value="pan">Pan</option>
+                            <option value="zoom_in">Zoom In</option>
+                            <option value="zoom_out">Zoom Out</option>
+                            <option value="rotate">Rotate</option>
+                            <option value="tilt">Tilt</option>
+                            <option value="fit_bounds">Fit Bounds</option>
+                          </select>
+                          <input
+                            type="number"
+                            placeholder="ms"
+                            value={activeElement.locationPayload.transitionMS || 2000}
+                            onChange={(e) => updateActivePayload({ transitionMS: parseInt(e.target.value) || 0 })}
+                            className="w-16 bg-zinc-800 border border-zinc-700 text-xs px-2 py-1 rounded outline-none text-zinc-200"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="border-t border-zinc-800 pt-3">
+                        <button
+                          onClick={captureMapState}
+                          className="w-full py-1.5 bg-orange-500 text-black text-[10px] font-bold rounded hover:bg-orange-400 transition-colors uppercase tracking-tight"
+                        >
+                          Capture Current View
+                        </button>
+                      </div>
+
+                      <div className="border-t border-zinc-800 pt-3">
+                        <div className="text-[8px] text-zinc-500 mb-2 uppercase">Camera States</div>
+                        <div className="space-y-3">
+                          <div>
+                            <div className="flex justify-between text-[8px] text-zinc-500 mb-1">
+                              <span>ZOOM</span>
+                              <span className="text-orange-500 font-mono">{activeElement.locationPayload.zoom.toFixed(1)}</span>
+                            </div>
+                            <input
+                              type="range" min="1" max="22" step="0.1"
+                              value={activeElement.locationPayload.zoom}
+                              onChange={(e) => updateActivePayload({ zoom: parseFloat(e.target.value) })}
+                              className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-[8px] text-zinc-500 mb-1">
+                              <span>ROTATION</span>
+                              <span className="text-orange-500 font-mono">{Math.round(activeElement.locationPayload.bearing || 0)}°</span>
+                            </div>
+                            <input
+                              type="range" min="-180" max="180" step="1"
+                              value={activeElement.locationPayload.bearing || 0}
+                              onChange={(e) => updateActivePayload({ bearing: parseFloat(e.target.value) })}
+                              className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex justify-between text-[8px] text-zinc-500 mb-1">
+                              <span>TILT</span>
+                              <span className="text-orange-500 font-mono">{Math.round(activeElement.locationPayload.pitch || 0)}°</span>
+                            </div>
+                            <input
+                              type="range" min="0" max="85" step="1"
+                              value={activeElement.locationPayload.pitch || 0}
+                              onChange={(e) => updateActivePayload({ pitch: parseFloat(e.target.value) })}
+                              className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-zinc-800 pt-3">
+                        <div className="text-[8px] text-zinc-500 mb-2">HIGHLIGHT COLOR</div>
                         <div className="flex gap-3 items-center">
                           <input
                             type="color"
@@ -509,24 +700,9 @@ const MapEditor: React.FC<Props> = ({ project }) => {
                             className="w-10 h-6 bg-transparent border-none cursor-pointer"
                           />
                           <span className="text-xs font-mono">
-                            {activeElement.locationPayload.color.toUpperCase()}
+                            {activeElement.locationPayload.color?.toUpperCase()}
                           </span>
                         </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-[8px] text-zinc-500">ZOOM_LEVEL</span>
-                          <span className="text-[10px] font-mono text-orange-500">
-                            {activeElement.locationPayload.zoom.toFixed(1)}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min="1" max="20" step="0.1"
-                          value={activeElement.locationPayload.zoom}
-                          onChange={(e) => updateActivePayload({ zoom: parseFloat(e.target.value) })}
-                          className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                        />
                       </div>
                     </div>
                   </section>

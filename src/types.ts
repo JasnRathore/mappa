@@ -11,10 +11,14 @@ export interface LocationPayload {
   id: string;
   center: [number, number];
   zoom: number;
-  color: string;
-  type: string;
-  display_name: string;
+  color?: string;
+  type?: string;
+  display_name?: string;
   geojson?: Record<string, unknown>;
+  bearing?: number;
+  pitch?: number;
+  transition?: string; // "fly", "ease", "jump", "pan", "zoom_in", "zoom_out", "rotate", "tilt", "fit_bounds"
+  transitionMS?: number;
 }
 
 export interface DetailEffectPayload {
