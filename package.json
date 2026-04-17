@@ -8,10 +8,15 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "render-server": "node scripts/render-server.mjs"
+    "render-server": "node scripts/render-server.mjs",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "maplibre-gl": "^5.23.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

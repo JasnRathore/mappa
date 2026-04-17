@@ -8,6 +8,7 @@ import {
   applyTimelineFrameToMap,
   createMapPlaybackCache,
 } from "../lib/mapPlayback";
+import { invoke } from "@tauri-apps/api/core";
 
 const NATIVE_RENDER_SERVER = "http://127.0.0.1:3030";
 
@@ -40,6 +41,7 @@ const MapRenderer: React.FC = () => {
   const [nativeRenderStatus, setNativeRenderStatus] = useState<NativeRenderStatus>({
     checked: false,
     available: false,
+    isTauri: false,
   });
   const projectRef = useRef<ProjectSettings | null>(null);
   const timelineElementsRef = useRef<TimelineElement[]>([]);
@@ -75,10 +77,13 @@ const MapRenderer: React.FC = () => {
         });
       })
       .catch((err) => {
+        // If it's Tauri, we don't necessarily need the HTTP server
+        const isTauri = typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
         setNativeRenderStatus({
           checked: true,
-          available: false,
-          error: err instanceof Error ? err.message : String(err),
+          available: isTauri,
+          isTauri,
+          error: isTauri ? undefined : (err instanceof Error ? err.message : String(err)),
         });
       })
       .finally(() => {
@@ -206,27 +211,36 @@ const MapRenderer: React.FC = () => {
 
       setStatus("Preparing Native FFmpeg Render...");
 
-      const startResponse = await fetch(`${NATIVE_RENDER_SERVER}/api/render/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let jobId: string;
+      
+      if (nativeRenderStatus.isTauri) {
+        jobId = await invoke("start_render_job", {
           fps: currentProject.fps,
           width: currentProject.width,
           height: currentProject.height,
-        }),
-      });
+        });
+      } else {
+        const startResponse = await fetch(`${NATIVE_RENDER_SERVER}/api/render/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fps: currentProject.fps,
+            width: currentProject.width,
+            height: currentProject.height,
+          }),
+        });
 
-      const startData = (await startResponse.json()) as {
-        jobId?: string;
-        encoder?: string;
-        error?: string;
-      };
+        const startData = (await startResponse.json()) as {
+          jobId?: string;
+          encoder?: string;
+          error?: string;
+        };
 
-      if (!startResponse.ok || !startData.jobId) {
-        throw new Error(startData.error || "Failed to start native render job.");
+        if (!startResponse.ok || !startData.jobId) {
+          throw new Error(startData.error || "Failed to start native render job.");
+        }
+        jobId = startData.jobId;
       }
-
-      const { jobId } = startData;
 
       setStatus("Warmup Pass 1/2...");
       await playTimelinePass(sessionId);
@@ -236,7 +250,7 @@ const MapRenderer: React.FC = () => {
       await playTimelinePass(sessionId);
       if (renderSessionRef.current !== sessionId) return;
 
-      setStatus(`FFmpeg Pass 3/3 (${startData.encoder || "ffmpeg"})...`);
+      setStatus(`FFmpeg Pass 3/3...`);
       setProgress(0);
       playbackCacheRef.current = createMapPlaybackCache();
 
@@ -258,49 +272,73 @@ const MapRenderer: React.FC = () => {
 
         await waitForMapSettled(map.current);
 
-        const frameBlob = await canvasToBlob(map.current.getCanvas());
-        const frameResponse = await fetch(
-          `${NATIVE_RENDER_SERVER}/api/render/frame?jobId=${encodeURIComponent(jobId)}&frame=${frameNumber}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "image/png" },
-            body: frameBlob,
-          }
-        );
+        const canvas = map.current.getCanvas();
+        
+        if (nativeRenderStatus.isTauri) {
+          const frameDataUrl = canvas.toDataURL("image/png");
+          await invoke("save_frame", {
+            jobId,
+            frameIndex: frameNumber,
+            base64Data: frameDataUrl,
+          });
+        } else {
+          const frameBlob = await canvasToBlob(canvas);
+          const frameResponse = await fetch(
+            `${NATIVE_RENDER_SERVER}/api/render/frame?jobId=${encodeURIComponent(jobId)}&frame=${frameNumber}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "image/png" },
+              body: frameBlob,
+            }
+          );
 
-        if (!frameResponse.ok) {
-          const frameData = (await frameResponse.json()) as { error?: string };
-          throw new Error(frameData.error || `Failed to upload frame ${frameNumber}.`);
+          if (!frameResponse.ok) {
+            const frameData = (await frameResponse.json()) as { error?: string };
+            throw new Error(frameData.error || `Failed to upload frame ${frameNumber}.`);
+          }
         }
 
         setProgress(((index + 1) / totalFrames) * 100);
       }
 
       setStatus("Encoding Video...");
-      const finishResponse = await fetch(
-        `${NATIVE_RENDER_SERVER}/api/render/finish?jobId=${encodeURIComponent(jobId)}`,
-        { method: "POST" }
-      );
-      const finishData = (await finishResponse.json()) as {
-        downloadUrl?: string;
-        encoder?: string;
-        error?: string;
-      };
+      
+      if (nativeRenderStatus.isTauri) {
+        const outputPath = await invoke<string>("finish_render_job", { jobId });
+        setStatus("Completed!");
+        setProgress(100);
+        
+        // In Tauri, we might want to show the file or just alert.
+        // For now, we'll just log it. 
+        // We could also use the shell plugin to open the folder.
+        await invoke("cleanup_render_job", { jobId });
+        alert(`Render finished: ${outputPath}`);
+      } else {
+        const finishResponse = await fetch(
+          `${NATIVE_RENDER_SERVER}/api/render/finish?jobId=${encodeURIComponent(jobId)}`,
+          { method: "POST" }
+        );
+        const finishData = (await finishResponse.json()) as {
+          downloadUrl?: string;
+          encoder?: string;
+          error?: string;
+        };
 
-      if (!finishResponse.ok || !finishData.downloadUrl) {
-        throw new Error(finishData.error || "Native render encoding failed.");
+        if (!finishResponse.ok || !finishData.downloadUrl) {
+          throw new Error(finishData.error || "Native render encoding failed.");
+        }
+
+        setDownloadUrl(finishData.downloadUrl);
+        setStatus(`Completed (${finishData.encoder || "ffmpeg"})!`);
+        setProgress(100);
+
+        const link = document.createElement("a");
+        link.href = finishData.downloadUrl;
+        link.download = `mappa-render-${Date.now()}.mp4`;
+        link.click();
       }
-
-      setDownloadUrl(finishData.downloadUrl);
-      setStatus(`Completed (${finishData.encoder || "ffmpeg"})!`);
-      setProgress(100);
-
-      const link = document.createElement("a");
-      link.href = finishData.downloadUrl;
-      link.download = `mappa-render-${Date.now()}.mp4`;
-      link.click();
     },
-    [canvasToBlob, playTimelinePass, waitForMapSettled]
+    [canvasToBlob, nativeRenderStatus.isTauri, playTimelinePass, waitForMapSettled]
   );
 
   const runBrowserRecorderCapture = useCallback(
