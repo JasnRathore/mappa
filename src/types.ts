@@ -3,6 +3,8 @@ export interface ProjectSettings {
   height: number;
   fps: number;
   durationFrames: number;
+  startFrame: number;
+  endFrame: number;
 }
 
 export type TimelineElementType = "location" | "effect_detail";

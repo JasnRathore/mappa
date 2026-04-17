@@ -3,6 +3,7 @@ import type { ProjectSettings } from "../types";
 
 interface Props {
   onComplete: (settings: ProjectSettings) => void;
+  onImport: (file: File) => void;
 }
 
 const PRESETS = [
@@ -14,20 +15,30 @@ const PRESETS = [
 
 const FPS_OPTIONS = [24, 30, 60];
 
-const ProjectSetup: React.FC<Props> = ({ onComplete }) => {
+const ProjectSetup: React.FC<Props> = ({ onComplete, onImport }) => {
   const [width, setWidth] = useState(1920);
   const [height, setHeight] = useState(1080);
   const [fps, setFps] = useState(30);
   const [durationSecs, setDurationSecs] = useState(30);
 
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const durationFrames = fps * durationSecs;
     onComplete({
       width,
       height,
       fps,
-      durationFrames: fps * durationSecs,
+      durationFrames,
+      startFrame: 0,
+      endFrame: durationFrames - 1
     });
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) onImport(file);
   };
 
   const setPreset = (w: number, h: number) => {
@@ -38,7 +49,24 @@ const ProjectSetup: React.FC<Props> = ({ onComplete }) => {
   return (
     <div className="flex items-center justify-center min-h-screen bg-zinc-950 text-zinc-300 font-sans p-6">
       <div className="max-w-md w-full bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-2xl">
-        <h1 className="text-2xl font-bold text-zinc-100 mb-2">New Map Project</h1>
+        <div className="flex justify-between items-start mb-2">
+          <h1 className="text-2xl font-bold text-zinc-100">Project Setup</h1>
+          <div className="flex flex-col items-end">
+             <input 
+               type="file" 
+               accept=".json" 
+               ref={fileInputRef} 
+               className="hidden" 
+               onChange={handleFileChange}
+             />
+             <button
+               onClick={() => fileInputRef.current?.click()}
+               className="text-[10px] font-bold text-orange-500 hover:text-orange-400 uppercase tracking-widest bg-orange-500/5 px-3 py-1.5 rounded border border-orange-500/20"
+             >
+               Open Existing Project
+             </button>
+          </div>
+        </div>
         <p className="text-zinc-500 text-sm mb-8">
           Configure your timeline and video output settings.
         </p>

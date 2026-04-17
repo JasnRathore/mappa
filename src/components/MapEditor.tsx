@@ -5,13 +5,17 @@ import type { ProjectSettings, TimelineElement, LocationPayload } from "../types
 
 interface Props {
   project: ProjectSettings;
+  setProject: React.Dispatch<React.SetStateAction<ProjectSettings | null>>;
+  timelineElements: TimelineElement[];
+  setTimelineElements: React.Dispatch<React.SetStateAction<TimelineElement[]>>;
+  onImport: (file: File) => void;
 }
 
 const PIXELS_PER_FRAME = 2;
 const TRACK_HEIGHT = 60;
 const TRACK_COUNT = 4;
 
-const MapEditor: React.FC<Props> = ({ project }) => {
+const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, setTimelineElements, onImport }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapCenterWrapper = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -20,11 +24,13 @@ const MapEditor: React.FC<Props> = ({ project }) => {
   const [searchResults, setSearchResults] = useState<LocationPayload[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
-  const [activeElementId, setActiveElementId] = useState<string | null>(null);
+    const [activeElementId, setActiveElementId] = useState<string | null>(null);
 
-  const [currentFrame, setCurrentFrame] = useState(0);
+  const [currentFrame, setCurrentFrame] = useState(project.startFrame);
   const [isPlaying, setIsPlaying] = useState(false);
+  
+  const [isRendering, setIsRendering] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
@@ -32,6 +38,8 @@ const MapEditor: React.FC<Props> = ({ project }) => {
   const lastDetailLevel = useRef<number | null>(null);
   // store initial drag context
   const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
+  const wasRendering = useRef(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
 
   // 1. INITIALIZE VECTOR MAP
   useEffect(() => {
@@ -43,6 +51,7 @@ const MapEditor: React.FC<Props> = ({ project }) => {
       center: [0, 20],
       zoom: 1.5,
       antialias: true,
+      preserveDrawingBuffer: true,
     });
 
     map.current.on("load", () => {
@@ -91,9 +100,8 @@ const MapEditor: React.FC<Props> = ({ project }) => {
       if (delta >= msPerFrame) {
         setCurrentFrame((prev) => {
           const nextFrame = prev + 1;
-          if (nextFrame >= project.durationFrames) {
-            setIsPlaying(false);
-            return prev;
+          if (nextFrame > project.endFrame) {
+            return project.startFrame; // Loop back to start
           }
           return nextFrame;
         });
@@ -465,6 +473,95 @@ const MapEditor: React.FC<Props> = ({ project }) => {
     };
   }, [isDraggingPlayhead, updatePlayheadFromMouse]);
 
+  // 5. EXPORT AND RENDER LOGIC
+  const exportProjectJSON = () => {
+    const data = {
+      project,
+      timelineElements,
+      version: "1.0.0",
+      exportedAt: new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mappa-project-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const startRecording = async () => {
+    if (!map.current || isRendering) return;
+
+    const canvas = map.current.getCanvas();
+    const stream = canvas.captureStream(project.fps);
+    
+    // Attempt MP4, fallback to WebM
+    let mimeType = "video/mp4";
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = "video/webm";
+    }
+
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+      videoBitsPerSecond: 12000000 // 12Mbps for high quality
+    });
+    recorderRef.current = recorder;
+
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mappa-render-${Date.now()}.${mimeType.includes("mp4") ? "mp4" : "webm"}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setIsRendering(false);
+      wasRendering.current = false;
+      setIsPlaying(false);
+    };
+
+    // Prepare for rendering
+    setIsPlaying(false);
+    setCurrentFrame(project.startFrame);
+    setIsRendering(true);
+    wasRendering.current = true;
+    setRenderProgress(0);
+
+    // Wait for map to settle at frame 0 before starting recorder
+    setTimeout(() => {
+      recorder.start();
+      setIsPlaying(true);
+    }, 1000);
+  };
+
+  // Monitor rendering progress
+  useEffect(() => {
+    if (isRendering) {
+      const totalToRender = project.endFrame - project.startFrame + 1;
+      const done = currentFrame - project.startFrame;
+      setRenderProgress(Math.max(0, Math.min(100, (done / totalToRender) * 100)));
+    }
+  }, [currentFrame, isRendering, project.startFrame, project.endFrame]);
+
+  // Handle auto-stop recorder when rendering ends
+  useEffect(() => {
+    if (wasRendering.current && isPlaying && currentFrame >= project.endFrame) {
+      if (recorderRef.current && recorderRef.current.state === "recording") {
+        // Give it a small buffer to capture final frames
+        setTimeout(() => {
+          recorderRef.current?.stop();
+          setIsPlaying(false);
+        }, 500);
+      }
+    }
+  }, [isPlaying, currentFrame, project.endFrame]);
+
 
   const formatTimecode = (frames: number) => {
     const totalSecs = frames / project.fps;
@@ -536,9 +633,43 @@ const MapEditor: React.FC<Props> = ({ project }) => {
 
         {/* MAP CENTER */}
         <main className="flex-1 relative bg-zinc-950 flex flex-col p-6 items-center justify-center overflow-hidden">
-          <div className="absolute top-4 left-6 z-10 flex gap-4">
+          <div className="absolute top-4 left-6 z-10 flex gap-4 items-center">
             <div className="bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 text-[10px] font-mono shadow-xl text-zinc-400">
               {project.width}x{project.height} @ {project.fps}FPS
+            </div>
+            
+            <div className="flex bg-zinc-950/80 rounded border border-zinc-700 shadow-xl overflow-hidden divide-x divide-zinc-800">
+                <button 
+                  onClick={() => {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".json";
+                    input.onchange = (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
+                      if (file) onImport(file);
+                    };
+                    input.click();
+                  }}
+                  className="px-3 py-1 text-[9px] font-bold text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors uppercase flex items-center gap-1.5"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                  Open
+                </button>
+                <button 
+                  onClick={exportProjectJSON}
+                  className="px-3 py-1 text-[9px] font-bold text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors uppercase flex items-center gap-1.5"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export JSON
+                </button>
+                <button 
+                  onClick={startRecording}
+                  disabled={isRendering}
+                  className="px-3 py-1 text-[9px] font-bold text-orange-500 hover:bg-orange-500 hover:text-black transition-colors uppercase flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                  {isRendering ? "Rendering..." : "Render MP4"}
+                </button>
             </div>
           </div>
 
@@ -766,8 +897,26 @@ const MapEditor: React.FC<Props> = ({ project }) => {
             <div className="font-mono text-sm text-zinc-300 bg-black/50 px-3 py-1 rounded border border-zinc-800">
               {formatTimecode(currentFrame)}
             </div>
-            <div className="text-[10px] font-mono text-zinc-500">
-              [ {currentFrame} / {project.durationFrames} ]
+            
+            <div className="flex items-center gap-4 ml-4 bg-zinc-950 px-3 py-1 rounded border border-zinc-800 shadow-inner">
+               <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase">Start</span>
+                  <input 
+                    type="number"
+                    value={project.startFrame}
+                    onChange={(e) => setProject(prev => prev ? { ...prev, startFrame: parseInt(e.target.value) || 0 } : null)}
+                    className="w-12 bg-black/40 border border-zinc-700 text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none focus:border-orange-500"
+                  />
+               </div>
+               <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase">End</span>
+                  <input 
+                    type="number"
+                    value={project.endFrame}
+                    onChange={(e) => setProject(prev => prev ? { ...prev, endFrame: parseInt(e.target.value) || 0 } : null)}
+                    className="w-12 bg-black/40 border border-zinc-700 text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none focus:border-orange-500"
+                  />
+               </div>
             </div>
           </div>
         </div>
@@ -793,6 +942,17 @@ const MapEditor: React.FC<Props> = ({ project }) => {
 
           {/* Tracks Container */}
           <div className="relative pt-2" style={{ width: Math.max(project.durationFrames * PIXELS_PER_FRAME, window.innerWidth), height: TRACK_COUNT * TRACK_HEIGHT }}>
+            
+            {/* Out-of-Range Background Dimming */}
+            <div 
+              className="absolute top-0 bottom-0 left-0 bg-black/40 pointer-events-none z-0"
+              style={{ width: project.startFrame * PIXELS_PER_FRAME }}
+            />
+            <div 
+              className="absolute top-0 bottom-0 right-0 bg-black/40 pointer-events-none z-0"
+              style={{ left: (project.endFrame + 1) * PIXELS_PER_FRAME, width: Math.max(0, (project.durationFrames - project.endFrame - 1) * PIXELS_PER_FRAME) }}
+            />
+
             {/* Playhead Line */}
             <div
               className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-20 pointer-events-none"
@@ -848,6 +1008,30 @@ const MapEditor: React.FC<Props> = ({ project }) => {
           </div>
         </div>
       </footer>
+
+      {/* Rendering Overlay */}
+      {isRendering && (
+          <div className="absolute inset-0 z-[100] bg-zinc-950/90 flex flex-col items-center justify-center backdrop-blur-sm">
+             <div className="w-64 space-y-4 text-center">
+                <div className="text-orange-500 font-bold text-sm uppercase tracking-widest animate-pulse">
+                    Rendering Project
+                </div>
+                <div className="h-1 w-full bg-zinc-800 rounded-full overflow-hidden">
+                    <div 
+                        className="h-full bg-orange-500 transition-all duration-300" 
+                        style={{ width: `${renderProgress}%` }}
+                    />
+                </div>
+                <div className="text-[10px] font-mono text-zinc-500">
+                    {Math.round(renderProgress)}% COMPLETE • {currentFrame} / {project.durationFrames} FRAMES
+                </div>
+                <div className="pt-4 text-[9px] text-zinc-600 leading-relaxed italic">
+                    Please keep this tab active and visible.<br/>
+                    Do not resize the window during render.
+                </div>
+             </div>
+          </div>
+      )}
     </div>
   );
 };
