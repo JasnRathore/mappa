@@ -11,7 +11,6 @@ interface Props {
   onImport: (file: File) => void;
 }
 
-const PIXELS_PER_FRAME = 2;
 const TRACK_HEIGHT = 60;
 const TRACK_COUNT = 4;
 
@@ -32,9 +31,18 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
 
+  const [timelineZoom, setTimelineZoom] = useState(2);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const playheadMarkerRef = useRef<HTMLDivElement>(null);
+
+  const [markers, setMarkers] = useState<Marker[]>(project.markers || []);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+  
+  useEffect(() => {
+    setProject(prev => prev ? { ...prev, markers } : null);
+  }, [markers]);
   const lastActiveLocationId = useRef<string | null>(null);
+  const lastCameraElementId = useRef<string | null>(null);
   const lastDetailLevel = useRef<number | null>(null);
   // store initial drag context
   const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
@@ -122,26 +130,33 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       (el) => currentFrame >= el.startFrame && currentFrame < el.startFrame + el.durationFrames
     );
 
-    const activeLocation = activeElements
-      .filter((el) => el.type === "location")
-      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
-
+    const activeLocations = activeElements.filter((el) => el.type === "location");
     const activeEffect = activeElements
       .filter((el) => el.type === "effect_detail")
       .sort((a, b) => b.trackIndex - a.trackIndex)[0];
+    
+    // Camera Focus Logic:
+    
+    const startingLocations = activeLocations
+      .filter(el => el.startFrame === currentFrame)
+      .sort((a, b) => b.trackIndex - a.trackIndex);
+    
+    const topActiveLocation = activeLocations
+      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
 
-    const locKey = activeLocation ? `${activeLocation.id}-${activeLocation.locationPayload?.zoom}-${activeLocation.locationPayload?.bearing}-${activeLocation.locationPayload?.pitch}-${activeLocation.locationPayload?.transition}-${activeLocation.locationPayload?.color}-${JSON.stringify(activeLocation.locationPayload?.center)}` : null;
+    // Decide which element should control the camera
+    let cameraElement = startingLocations.length > 0 ? startingLocations[0] : topActiveLocation;
+
+    const locKey = cameraElement ? `${cameraElement.id}-${cameraElement.locationPayload?.zoom}-${cameraElement.locationPayload?.bearing}-${cameraElement.locationPayload?.pitch}-${cameraElement.locationPayload?.transition}-${cameraElement.locationPayload?.color}-${JSON.stringify(cameraElement.locationPayload?.center)}` : null;
 
     if (locKey !== lastActiveLocationId.current) {
       lastActiveLocationId.current = locKey;
 
-      if (activeLocation && activeLocation.locationPayload) {
-        const loc = activeLocation.locationPayload;
+      if (cameraElement && cameraElement.locationPayload) {
+        const loc = cameraElement.locationPayload;
         const transition = loc.transition || "fly";
         
-        // Calculate transition duration
-        // Prefer explicit transitionMS, otherwise default to 2000ms or remaining clip duration
-        const clipMs = (activeLocation.durationFrames / project.fps) * 1000;
+        const clipMs = (cameraElement.durationFrames / project.fps) * 1000;
         const duration = loc.transitionMS || Math.min(2000, clipMs);
 
         const options = {
@@ -169,11 +184,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
             map.current.panTo(loc.center, { duration, essential: true });
             break;
           case "rotate":
-            // Enforce absolute bearing from payload
             map.current.easeTo(options);
             break;
           case "tilt":
-            // Enforce absolute pitch from payload
             map.current.easeTo(options);
             break;
           case "zoom_in":
@@ -183,32 +196,34 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
             map.current.flyTo({ ...options, zoom: loc.zoom - 1 });
             break;
           case "fit_bounds":
-            if (loc.geojson && loc.geojson.type === "Feature") {
-               // Simple bounding box calculation if possible, or just fly to the defined zoom
-               map.current.flyTo(options);
-            } else {
-               map.current.flyTo(options);
-            }
+            map.current.flyTo(options);
             break;
           case "fly":
           default:
             map.current.flyTo(options);
             break;
         }
+      }
+    }
 
-        if (map.current.isStyleLoaded()) {
-          const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
-          if (source) {
-            source.setData({
-              type: "Feature",
-              properties: { color: loc.color || "#f97316" },
-              geometry: loc.geojson || { type: "Point", coordinates: loc.center },
-            });
-          }
+    // Update ALL Highlights
+    if (map.current.isStyleLoaded()) {
+      const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
+      if (source) {
+        const features = activeLocations.map(el => ({
+          type: "Feature",
+          properties: { color: el.locationPayload?.color || "#f97316" },
+          geometry: el.locationPayload?.geojson || { type: "Point", coordinates: el.locationPayload?.center },
+        }));
+        
+        if (features.length > 0) {
+          source.setData({
+            type: "FeatureCollection",
+            features: features as any,
+          });
+        } else {
+          source.setData({ type: "FeatureCollection", features: [] });
         }
-      } else if (!activeLocation && map.current.isStyleLoaded()) {
-        const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
-        if (source) source.setData({ type: "FeatureCollection", features: [] });
       }
     }
 
@@ -294,7 +309,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     if (targetTrack < 0) targetTrack = 0;
     if (targetTrack >= TRACK_COUNT) targetTrack = TRACK_COUNT - 1;
 
-    let startFrame = Math.floor(dropX / PIXELS_PER_FRAME);
+    let startFrame = Math.floor(dropX / timelineZoom);
     if (startFrame < 0) startFrame = 0;
 
     const data = e.dataTransfer.getData("application/json");
@@ -361,7 +376,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       if (newTrack < 0) newTrack = 0;
       if (newTrack >= TRACK_COUNT) newTrack = TRACK_COUNT - 1;
 
-      let newStart = origStart + Math.round(deltaX / PIXELS_PER_FRAME);
+      let newStart = origStart + Math.round(deltaX / timelineZoom);
       if (newStart < 0) newStart = 0;
 
       setTimelineElements(prev => prev.map(el =>
@@ -386,6 +401,27 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     };
   }, [draggingElementId]);
 
+
+  const handleZoomChange = (newZoom: number) => {
+    if (!timelineRef.current) return;
+    const oldZoom = timelineZoom;
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const viewportWidth = timelineRef.current.clientWidth;
+    
+    // Calculate where the playhead is relative to the viewport
+    const playheadX = currentFrame * oldZoom;
+    const relativeX = playheadX - scrollLeft;
+
+    setTimelineZoom(newZoom);
+
+    // Maintain the playhead's relative position in the viewport
+    requestAnimationFrame(() => {
+      if (timelineRef.current) {
+        const newPlayheadX = currentFrame * newZoom;
+        timelineRef.current.scrollLeft = newPlayheadX - relativeX;
+      }
+    });
+  };
 
   const updateActiveElement = (updates: Partial<TimelineElement>) => {
     setTimelineElements(prev => prev.map(el =>
@@ -425,16 +461,25 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
+        return;
+      }
+
       if (e.key === "Backspace" || e.key === "Delete") {
-        if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
-            return;
-        }
         deleteActiveElement();
+      } else if (e.key.toLowerCase() === "m") {
+        const newMarker: Marker = {
+          id: `marker-${Date.now()}`,
+          frame: currentFrame,
+          label: "Marker",
+          color: "#ef4444",
+        };
+        setMarkers(prev => [...prev, newMarker]);
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [deleteActiveElement]);
+  }, [deleteActiveElement, currentFrame]);
 
   const activeElement = timelineElements.find(e => e.id === activeElementId);
 
@@ -450,7 +495,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     const rect = timelineRef.current.getBoundingClientRect();
     const scrollLeft = timelineRef.current.scrollLeft;
     const x = clientX - rect.left + scrollLeft;
-    let frame = Math.floor(x / PIXELS_PER_FRAME);
+    let frame = Math.floor(x / timelineZoom);
     if (frame < 0) frame = 0;
     if (frame >= project.durationFrames) frame = project.durationFrames - 1;
     setCurrentFrame(frame);
@@ -898,26 +943,38 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
               {formatTimecode(currentFrame)}
             </div>
             
-            <div className="flex items-center gap-4 ml-4 bg-zinc-950 px-3 py-1 rounded border border-zinc-800 shadow-inner">
-               <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-bold text-zinc-600 uppercase">Start</span>
+            <div className="flex bg-zinc-950/80 rounded border border-zinc-800 shadow-inner overflow-hidden">
+               <div className="flex items-center gap-2 px-3 border-r border-zinc-900">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase text-zinc-500">Start</span>
                   <input 
                     type="number"
                     value={project.startFrame}
                     onChange={(e) => setProject(prev => prev ? { ...prev, startFrame: parseInt(e.target.value) || 0 } : null)}
-                    className="w-12 bg-black/40 border border-zinc-700 text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none focus:border-orange-500"
+                    className="w-12 bg-black/40 border-none text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none"
                   />
                </div>
-               <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-bold text-zinc-600 uppercase">End</span>
+               <div className="flex items-center gap-2 px-3">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase text-zinc-500">End</span>
                   <input 
                     type="number"
                     value={project.endFrame}
                     onChange={(e) => setProject(prev => prev ? { ...prev, endFrame: parseInt(e.target.value) || 0 } : null)}
-                    className="w-12 bg-black/40 border border-zinc-700 text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none focus:border-orange-500"
+                    className="w-12 bg-black/40 border-none text-[10px] font-mono text-orange-400 rounded px-1.5 py-0.5 outline-none"
                   />
                </div>
             </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+             <div className="flex items-center gap-2 bg-black/40 px-3 py-1 rounded border border-zinc-800">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-500"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                <input 
+                  type="range" min="0.5" max="20" step="0.1" 
+                  value={timelineZoom} 
+                  onChange={(e) => handleZoomChange(parseFloat(e.target.value))}
+                  className="w-24 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                />
+             </div>
           </div>
         </div>
 
@@ -930,35 +987,83 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         >
           {/* Timeline Header Scrubber Area */}
           <div
-            className="sticky top-0 h-6 bg-zinc-950/80 border-b border-zinc-800 z-10 cursor-col-resize"
+            className="sticky top-0 h-7 bg-zinc-950/90 border-b border-zinc-800 z-10 cursor-col-resize overflow-hidden"
+            style={{ position: 'sticky' }}
             onMouseDown={handleTimelineHeaderMouseDown}
           >
-            {/* Draw some ticks in background using inline css or just simple grid */}
+            {/* Frame number ruler */}
+            {(() => {
+              const totalFrames = project.durationFrames;
+              const totalWidth = Math.max(totalFrames * timelineZoom, window.innerWidth);
+              // Pick an interval so labels are ~80px apart
+              const rawInterval = 80 / timelineZoom;
+              const niceIntervals = [1,2,5,10,15,20,25,30,50,60,75,100,120,150,200,250,300,500,600,750,1000,1200,1500,2000,3000];
+              const interval = niceIntervals.find(n => n >= rawInterval) ?? 3000;
+              const ticks: JSX.Element[] = [];
+              for (let f = 0; f <= totalFrames; f += interval) {
+                const x = f * timelineZoom;
+                ticks.push(
+                  <div key={f} className="absolute top-0 bottom-0 flex flex-col items-start pointer-events-none" style={{ left: x }}>
+                    <div className="w-px h-2 bg-zinc-600" />
+                    <span className="text-[8px] font-mono text-zinc-500 pl-0.5 select-none leading-none mt-px">{f}</span>
+                  </div>
+                );
+              }
+              return ticks;
+            })()}
+
+            {/* Playhead frame label — floats above the playhead arrow */}
             <div
-              className="absolute inset-0 opacity-20 pointer-events-none"
-              style={{ backgroundImage: `linear-gradient(to right, #ffffff 1px, transparent 1px)`, backgroundSize: `${project.fps * PIXELS_PER_FRAME}px 100%` }}
-            />
+              className="absolute top-0 pointer-events-none z-30 flex flex-col items-center"
+              style={{ left: currentFrame * timelineZoom }}
+            >
+              <div
+                className="relative -translate-x-1/2 bg-red-500 text-white text-[8px] font-mono font-bold px-1 py-px rounded-sm leading-tight whitespace-nowrap shadow-md"
+                style={{ top: 0 }}
+              >
+                {currentFrame}
+              </div>
+            </div>
+
+            {/* Markers */}
+            {markers.map(m => (
+              <div 
+                key={m.id}
+                className="absolute top-0 bottom-0 w-2 flex flex-col items-center group cursor-pointer"
+                style={{ left: m.frame * timelineZoom - 4 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCurrentFrame(m.frame);
+                }}
+              >
+                <div className="w-2 h-2 rotate-45 mt-1" style={{ backgroundColor: m.color }} />
+                <div className="hidden group-hover:block absolute top-4 bg-zinc-800 text-[8px] px-1 py-0.5 rounded border border-zinc-700 whitespace-nowrap z-50">
+                  {m.label} ({m.frame})
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Tracks Container */}
-          <div className="relative pt-2" style={{ width: Math.max(project.durationFrames * PIXELS_PER_FRAME, window.innerWidth), height: TRACK_COUNT * TRACK_HEIGHT }}>
+          <div className="relative pt-2" style={{ width: Math.max(project.durationFrames * timelineZoom, window.innerWidth), height: TRACK_COUNT * TRACK_HEIGHT }}>
             
             {/* Out-of-Range Background Dimming */}
             <div 
               className="absolute top-0 bottom-0 left-0 bg-black/40 pointer-events-none z-0"
-              style={{ width: project.startFrame * PIXELS_PER_FRAME }}
+              style={{ width: project.startFrame * timelineZoom }}
             />
             <div 
               className="absolute top-0 bottom-0 right-0 bg-black/40 pointer-events-none z-0"
-              style={{ left: (project.endFrame + 1) * PIXELS_PER_FRAME, width: Math.max(0, (project.durationFrames - project.endFrame - 1) * PIXELS_PER_FRAME) }}
+              style={{ left: (project.endFrame + 1) * timelineZoom, width: Math.max(0, (project.durationFrames - project.endFrame - 1) * timelineZoom) }}
             />
 
             {/* Playhead Line */}
             <div
               className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-20 pointer-events-none"
-              style={{ left: currentFrame * PIXELS_PER_FRAME }}
+              style={{ left: currentFrame * timelineZoom }}
             >
-              <div className="absolute top-[-24px] left-[-4px] w-0 h-0 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-red-500" />
+              {/* Arrow pointing down from ruler */}
+              <div className="absolute top-[-28px] left-[-4px] w-0 h-0 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-red-500" />
             </div>
 
             {/* Draw Track Separators */}
@@ -975,8 +1080,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
             {/* Elements */}
             {timelineElements.map((el) => {
               const isSelected = activeElementId === el.id;
-              const left = el.startFrame * PIXELS_PER_FRAME;
-              const width = el.durationFrames * PIXELS_PER_FRAME;
+              const left = el.startFrame * timelineZoom;
+              const width = el.durationFrames * timelineZoom;
               const top = el.trackIndex * TRACK_HEIGHT + 4; // 4px padding
 
               const baseColor = el.type === "location" ? "border-orange-500/50 bg-orange-500/10" : "border-indigo-500/50 bg-indigo-500/10";

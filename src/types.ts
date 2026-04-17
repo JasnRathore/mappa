@@ -5,6 +5,14 @@ export interface ProjectSettings {
   durationFrames: number;
   startFrame: number;
   endFrame: number;
+  markers?: Marker[];
+}
+
+export interface Marker {
+  id: string;
+  frame: number;
+  label: string;
+  color: string;
 }
 
 export type TimelineElementType = "location" | "effect_detail";
