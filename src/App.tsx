@@ -1,16 +1,17 @@
-import { useState } from "react";
-import MapEditor from "./components/MapEditor";
+
 import ProjectSetup from "./components/ProjectSetup";
 import MapRenderer from "./components/MapRenderer";
-import type { ProjectSettings, TimelineElement } from "./types";
+import { Workspace } from "./components/layout/Workspace";
+import { useProjectStore } from "./store/useProjectStore";
 
 function App() {
   const isRenderMode = window.location.search.includes("mode=render");
-
-  const [project, setProject] = useState<ProjectSettings | null>(null);
-  const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
+  const { project, setProject, setTimelineElements } = useProjectStore();
 
   if (isRenderMode) {
+    // Note: Render mode handles its own IndexedDB state parsing 
+    // but ideally could also just use zustand if passed correctly.
+    // Keeping existing behavior for render mode.
     return <MapRenderer />;
   }
 
@@ -20,7 +21,6 @@ function App() {
       try {
         const data = JSON.parse(e.target?.result as string);
         if (data.project && Array.isArray(data.timelineElements)) {
-          // Basic validation and potentially migration logic could go here
           setProject(data.project);
           setTimelineElements(data.timelineElements);
         } else {
@@ -43,17 +43,7 @@ function App() {
     );
   }
 
-  return (
-    <div key={project.width + project.height + project.fps + project.durationFrames}>
-      <MapEditor 
-        project={project} 
-        setProject={setProject}
-        timelineElements={timelineElements}
-        setTimelineElements={setTimelineElements}
-        onImport={handleLoadProject}
-      />
-    </div>
-  );
+  return <Workspace />;
 }
 
 export default App;

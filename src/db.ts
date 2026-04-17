@@ -7,6 +7,7 @@ const DB_VERSION = 1;
 export interface RenderData {
   project: ProjectSettings;
   timelineElements: TimelineElement[];
+  trackStates: Record<number, { locked: boolean; hidden: boolean }>;
 }
 
 export const openDB = (): Promise<IDBDatabase> => {

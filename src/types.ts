@@ -8,6 +8,13 @@ export interface ProjectSettings {
   startFrame: number;
   endFrame: number;
   markers?: Marker[];
+  trackStates?: TrackState[];
+}
+
+export interface TrackState {
+  id: number; // correlates to trackIndex
+  locked: boolean;
+  hidden: boolean;
 }
 
 export interface Marker {
@@ -21,6 +28,7 @@ export type TimelineElementType = "location" | "effect_detail";
 
 export interface LocationPayload {
   id: string;
+  name?: string;
   center: [number, number];
   zoom: number;
   color?: string;
@@ -40,6 +48,14 @@ export interface DetailEffectPayload {
   detailLevel: number; // 0-100
 }
 
+export interface Keyframe {
+  id: string;
+  frameOffset: number; // relative to element start
+  property: string; // "center", "zoom", "bearing", "pitch", "opacity", "detailLevel"
+  value: any;
+  easing?: string; // "linear", "ease-in", "ease-out", "ease-in-out"
+}
+
 export interface TimelineElement {
   id: string; // unique id for the timeline instance
   name: string;
@@ -51,4 +67,7 @@ export interface TimelineElement {
   // Type-specific data
   locationPayload?: LocationPayload;
   effectPayload?: DetailEffectPayload;
+  
+  // Animation data
+  keyframes?: Keyframe[];
 }

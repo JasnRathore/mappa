@@ -299,7 +299,9 @@ const MapRenderer: React.FC = () => {
   const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
   const [exportSettings, setExportSettings] = useState<ExportSettings | null>(null);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [trackStates, setTrackStates] = useState<Record<number, { locked: boolean; hidden: boolean }>>({});
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+
   const [previewFrame, setPreviewFrame] = useState(0);
   const [previewScale, setPreviewScale] = useState(1);
   const [surfaceSize, setSurfaceSize] = useState({ width: 1280, height: 720 });
@@ -341,6 +343,7 @@ const MapRenderer: React.FC = () => {
 
         setProject(data.project);
         setTimelineElements(data.timelineElements);
+        setTrackStates(data.trackStates || {});
 
         const initialSettings = createDefaultSettings(data.project);
         setExportSettings(initialSettings);
@@ -460,10 +463,11 @@ const MapRenderer: React.FC = () => {
       map: mapRef.current,
       frameIndex: previewFrame,
       timelineElements,
+      trackStates,
       fps: project.fps,
       cache: previewDeterministicCacheRef.current,
     });
-  }, [isPreviewPlaying, mapReady, previewFrame, project, timelineElements]);
+  }, [isPreviewPlaying, mapReady, previewFrame, project, timelineElements, trackStates]);
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -740,6 +744,7 @@ const MapRenderer: React.FC = () => {
           map: mapRef.current,
           frameIndex: frame,
           timelineElements: timelineRef.current,
+          trackStates,
           fps: project.fps,
           cache: previewDeterministicCacheRef.current,
         });
