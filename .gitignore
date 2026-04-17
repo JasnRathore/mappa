@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 docs
-
+src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
