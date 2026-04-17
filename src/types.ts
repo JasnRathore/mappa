@@ -29,6 +29,9 @@ export interface LocationPayload {
   pitch?: number;
   transition?: string; // "fly", "ease", "jump", "pan", "zoom_in", "zoom_out", "rotate", "tilt", "fit_bounds"
   transitionMS?: number;
+  highlightEnabled?: boolean;
+  fadeInFrames?: number;
+  fadeOutFrames?: number;
 }
 
 export interface DetailEffectPayload {

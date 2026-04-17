@@ -108,7 +108,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         source: "city-area",
         paint: {
           "fill-color": ["get", "color"],
-          "fill-opacity": 0.4,
+          "fill-opacity": ["coalesce", ["get", "opacity"], 0.4],
         },
       });
 
@@ -243,11 +243,33 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     if (map.current.isStyleLoaded()) {
       const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
       if (source) {
-        const features = activeLocations.map(el => ({
-          type: "Feature",
-          properties: { color: el.locationPayload?.color || "#f97316" },
-          geometry: el.locationPayload?.geojson || { type: "Point", coordinates: el.locationPayload?.center },
-        }));
+        const features = activeLocations.map(el => {
+          let alpha = 0.4;
+          const loc = el.locationPayload;
+          if (loc?.highlightEnabled === false) {
+             alpha = 0;
+          } else if (loc) {
+             const fi = loc.fadeInFrames || 0;
+             const fo = loc.fadeOutFrames || 0;
+             const frameIn = currentFrame - el.startFrame;
+             const frameOut = (el.startFrame + el.durationFrames) - currentFrame;
+             
+             if (fi > 0 && frameIn < fi) {
+               alpha = 0.4 * (frameIn / fi);
+             } else if (fo > 0 && frameOut <= fo) {
+               alpha = 0.4 * (frameOut / fo);
+             }
+          }
+          
+          return {
+            type: "Feature",
+            properties: { 
+              color: loc?.color || "#f97316",
+              opacity: alpha
+            },
+            geometry: loc?.geojson || { type: "Point", coordinates: loc?.center },
+          };
+        });
         
         if (features.length > 0) {
           source.setData({
@@ -1098,18 +1120,56 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
                       </div>
 
                       <div className="border-t border-zinc-800 pt-3">
-                        <div className="text-[8px] text-zinc-500 mb-2">HIGHLIGHT COLOR</div>
-                        <div className="flex gap-3 items-center">
-                          <input
-                            type="color"
-                            value={activeElement.locationPayload.color}
-                            onChange={(e) => updateActivePayload({ color: e.target.value })}
-                            className="w-10 h-6 bg-transparent border-none cursor-pointer"
-                          />
-                          <span className="text-xs font-mono">
-                            {activeElement.locationPayload.color?.toUpperCase()}
-                          </span>
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="text-[8px] text-zinc-500 uppercase flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={activeElement.locationPayload.highlightEnabled !== false}
+                              onChange={(e) => updateActivePayload({ highlightEnabled: e.target.checked })}
+                              className="accent-orange-500"
+                            />
+                            SHOW HIGHLIGHT
+                          </label>
                         </div>
+                        
+                        {(activeElement.locationPayload.highlightEnabled !== false) && (
+                          <div className="space-y-3 mt-2">
+                            <div className="flex gap-3 items-center">
+                              <input
+                                type="color"
+                                value={activeElement.locationPayload.color || "#f97316"}
+                                onChange={(e) => updateActivePayload({ color: e.target.value })}
+                                className="w-10 h-6 bg-transparent border-none cursor-pointer"
+                              />
+                              <span className="text-xs font-mono">
+                                {(activeElement.locationPayload.color || "#f97316").toUpperCase()}
+                              </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <div>
+                                <span className="text-[8px] text-zinc-500 block mb-1">FADE IN (frames)</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={activeElement.locationPayload.fadeInFrames || 0}
+                                  onChange={(e) => updateActivePayload({ fadeInFrames: parseInt(e.target.value) || 0 })}
+                                  className="w-full bg-zinc-800 border border-zinc-700 text-xs px-2 py-1 rounded outline-none text-zinc-200"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-zinc-500 block mb-1">FADE OUT (frames)</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={activeElement.locationPayload.fadeOutFrames || 0}
+                                  onChange={(e) => updateActivePayload({ fadeOutFrames: parseInt(e.target.value) || 0 })}
+                                  className="w-full bg-zinc-800 border border-zinc-700 text-xs px-2 py-1 rounded outline-none text-zinc-200"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </section>
