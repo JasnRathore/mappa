@@ -38,9 +38,42 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   const [markers, setMarkers] = useState<Marker[]>(project.markers || []);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
   
+  const [activeTool, setActiveTool] = useState<"pointer" | "blade">("pointer");
+  const [snappingEnabled, setSnappingEnabled] = useState(true);
+
+  const [trimmingElementId, setTrimmingElementId] = useState<string | null>(null);
+  const trimState = useRef<{ startX: number; origStart: number; origDuration: number; edge: "left" | "right" } | null>(null);
+
   useEffect(() => {
     setProject(prev => prev ? { ...prev, markers } : null);
   }, [markers]);
+
+  const getSnapTargets = useCallback(() => {
+    const targets = new Set<number>();
+    targets.add(currentFrame);
+    markers.forEach(m => targets.add(m.frame));
+    timelineElements.forEach(el => {
+      targets.add(el.startFrame);
+      targets.add(el.startFrame + el.durationFrames);
+    });
+    return Array.from(targets).sort((a,b)=>a-b);
+  }, [currentFrame, markers, timelineElements]);
+
+  const snapFrame = useCallback((frame: number) => {
+    if (!snappingEnabled) return frame;
+    const targets = getSnapTargets();
+    const threshold = Math.max(1, Math.round(10 / timelineZoom));
+    let closest = frame;
+    let minDiff = threshold + 1;
+    for (const t of targets) {
+      if (Math.abs(t - frame) < minDiff) {
+        minDiff = Math.abs(t - frame);
+        closest = t;
+      }
+    }
+    return closest;
+  }, [snappingEnabled, getSnapTargets, timelineZoom]);
+
   const lastActiveLocationId = useRef<string | null>(null);
   const lastCameraElementId = useRef<string | null>(null);
   const lastDetailLevel = useRef<number | null>(null);
@@ -262,6 +295,60 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   }, [updateMapState]);
 
 
+  // 3b. AUTO-CAPTURE FROM MAP INTERACTION
+  const editorStateRef = useRef({ activeElementId, currentFrame, timelineElements });
+  useEffect(() => {
+    editorStateRef.current = { activeElementId, currentFrame, timelineElements };
+  }, [activeElementId, currentFrame, timelineElements]);
+
+  useEffect(() => {
+    if (!map.current) return;
+    
+    const handleMapUserInteraction = (e: any) => {
+      // originalEvent only exists if the interaction was caused by a user (drag, scroll), not code (flyTo)
+      if (!e.originalEvent) return;
+      
+      const state = editorStateRef.current;
+      if (!state.activeElementId) return;
+      
+      const el = state.timelineElements.find(x => x.id === state.activeElementId);
+      if (!el || el.type !== "location") return;
+      
+      // Auto-capture ONLY if playhead is strictly inside this clip boundaries
+      if (state.currentFrame >= el.startFrame && state.currentFrame < el.startFrame + el.durationFrames) {
+        if (!map.current) return;
+        const center = map.current.getCenter();
+        
+        setTimelineElements(prev => prev.map(p => {
+          if (p.id !== el.id || p.type !== "location" || !p.locationPayload) return p;
+          return {
+            ...p,
+            locationPayload: {
+              ...p.locationPayload,
+              center: [center.lng, center.lat],
+              zoom: map.current!.getZoom(),
+              bearing: map.current!.getBearing(),
+              pitch: map.current!.getPitch(),
+            }
+          };
+        }));
+      }
+    };
+
+    const mapInstance = map.current;
+    mapInstance.on("dragend", handleMapUserInteraction);
+    mapInstance.on("zoomend", handleMapUserInteraction);
+    mapInstance.on("pitchend", handleMapUserInteraction);
+    mapInstance.on("rotateend", handleMapUserInteraction);
+
+    return () => {
+      mapInstance.off("dragend", handleMapUserInteraction);
+      mapInstance.off("zoomend", handleMapUserInteraction);
+      mapInstance.off("pitchend", handleMapUserInteraction);
+      mapInstance.off("rotateend", handleMapUserInteraction);
+    };
+  }, []);
+
   // 4. TIMELINE INTERACTIONS
 
   const handleSearch = async () => {
@@ -377,6 +464,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       if (newTrack >= TRACK_COUNT) newTrack = TRACK_COUNT - 1;
 
       let newStart = origStart + Math.round(deltaX / timelineZoom);
+      newStart = snapFrame(newStart);
       if (newStart < 0) newStart = 0;
 
       setTimelineElements(prev => prev.map(el =>
@@ -399,7 +487,107 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingElementId]);
+  }, [draggingElementId, snapFrame, timelineZoom]);
+
+  // Trim dragging logic
+  const handleTrimMouseDown = (e: React.MouseEvent, id: string, edge: "left" | "right") => {
+    e.stopPropagation();
+    setActiveElementId(id);
+    const el = timelineElements.find(t => t.id === id);
+    if (!el) return;
+
+    setTrimmingElementId(id);
+    trimState.current = {
+      startX: e.clientX,
+      origStart: el.startFrame,
+      origDuration: el.durationFrames,
+      edge
+    };
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!trimmingElementId || !trimState.current) return;
+      const { startX, origStart, origDuration, edge } = trimState.current;
+
+      const deltaX = e.clientX - startX;
+      let frameDelta = Math.round(deltaX / timelineZoom);
+
+      setTimelineElements(prev => prev.map(el => {
+        if (el.id !== trimmingElementId) return el;
+        
+        let newStart = origStart;
+        let newDuration = origDuration;
+
+        if (edge === "left") {
+          let potentialStart = origStart + frameDelta;
+          potentialStart = snapFrame(potentialStart);
+          const maxStart = origStart + origDuration - 1; // Need at least 1 frame duration
+          if (potentialStart > maxStart) potentialStart = maxStart;
+          if (potentialStart < 0) potentialStart = 0;
+          
+          newStart = potentialStart;
+          newDuration = origDuration - (newStart - origStart);
+        } else if (edge === "right") {
+          let potentialEnd = origStart + origDuration + frameDelta;
+          potentialEnd = snapFrame(potentialEnd);
+          if (potentialEnd <= origStart) potentialEnd = origStart + 1;
+          newDuration = potentialEnd - origStart;
+        }
+
+        return { ...el, startFrame: newStart, durationFrames: newDuration };
+      }));
+    };
+
+    const handleMouseUp = () => {
+      setTrimmingElementId(null);
+      trimState.current = null;
+    };
+
+    if (trimmingElementId) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [trimmingElementId, snapFrame, timelineZoom]);
+
+  const handleClipClick = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (activeTool === "blade") {
+      // Perform cut
+      const el = timelineElements.find(x => x.id === id);
+      if (!el || !timelineRef.current) return;
+      const rect = timelineRef.current.getBoundingClientRect();
+      const scrollLeft = timelineRef.current.scrollLeft;
+      const x = e.clientX - rect.left + scrollLeft;
+      const frameX = Math.floor(x / timelineZoom);
+      
+      const cutFrame = snapFrame(frameX);
+
+      if (cutFrame > el.startFrame && cutFrame < el.startFrame + el.durationFrames) {
+        const dur1 = cutFrame - el.startFrame;
+        const dur2 = el.durationFrames - dur1;
+        
+        const newEl: TimelineElement = {
+          ...el,
+          id: `clip-${Date.now()}`,
+          startFrame: cutFrame,
+          durationFrames: dur2
+        };
+        
+        setTimelineElements(prev => {
+          const mod = prev.map(p => p.id === id ? { ...p, durationFrames: dur1 } : p);
+          return [...mod, newEl];
+        });
+      }
+      setActiveTool("pointer");
+    } else {
+      setActiveElementId(id);
+    }
+  };
 
 
   const handleZoomChange = (newZoom: number) => {
@@ -459,6 +647,23 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     setActiveElementId(null);
   }, [activeElementId]);
 
+  const rippleDeleteActiveElement = useCallback(() => {
+    if (!activeElementId) return;
+    const elToDelete = timelineElements.find(e => e.id === activeElementId);
+    if (!elToDelete) return;
+    
+    setTimelineElements(prev => {
+      const remaining = prev.filter(e => e.id !== activeElementId);
+      return remaining.map(e => {
+        if (e.trackIndex === elToDelete.trackIndex && e.startFrame >= elToDelete.startFrame) {
+          return { ...e, startFrame: Math.max(0, e.startFrame - elToDelete.durationFrames) };
+        }
+        return e;
+      });
+    });
+    setActiveElementId(null);
+  }, [activeElementId, timelineElements]);
+
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
@@ -466,7 +671,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       }
 
       if (e.key === "Backspace" || e.key === "Delete") {
-        deleteActiveElement();
+        if (e.shiftKey) rippleDeleteActiveElement();
+        else deleteActiveElement();
       } else if (e.key.toLowerCase() === "m") {
         const newMarker: Marker = {
           id: `marker-${Date.now()}`,
@@ -475,11 +681,31 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           color: "#ef4444",
         };
         setMarkers(prev => [...prev, newMarker]);
+      } else if (e.key.toLowerCase() === "b") {
+        setActiveTool("blade");
+      } else if (e.key.toLowerCase() === "a" || e.key.toLowerCase() === "v") {
+        setActiveTool("pointer");
+      } else if (e.key.toLowerCase() === "n") {
+        setSnappingEnabled(prev => !prev);
+      } else if (e.key === "ArrowLeft") {
+        setCurrentFrame(prev => Math.max(0, prev - 1));
+      } else if (e.key === "ArrowRight") {
+        setCurrentFrame(prev => Math.min(project.durationFrames - 1, prev + 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const targets = getSnapTargets().filter(t => t < currentFrame);
+        if (targets.length > 0) setCurrentFrame(targets[targets.length - 1]);
+        else setCurrentFrame(0);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const targets = getSnapTargets().filter(t => t > currentFrame);
+        if (targets.length > 0) setCurrentFrame(targets[0]);
+        else setCurrentFrame(project.durationFrames - 1);
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [deleteActiveElement, currentFrame]);
+  }, [deleteActiveElement, rippleDeleteActiveElement, currentFrame, getSnapTargets]);
 
   const activeElement = timelineElements.find(e => e.id === activeElementId);
 
@@ -496,6 +722,11 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     const scrollLeft = timelineRef.current.scrollLeft;
     const x = clientX - rect.left + scrollLeft;
     let frame = Math.floor(x / timelineZoom);
+    if (!isDraggingPlayhead) frame = snapFrame(frame); // Snap on initial click down
+    else {
+      // Snap during drag
+      frame = snapFrame(frame);
+    }
     if (frame < 0) frame = 0;
     if (frame >= project.durationFrames) frame = project.durationFrames - 1;
     setCurrentFrame(frame);
@@ -966,6 +1197,34 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           </div>
 
           <div className="flex items-center gap-4">
+             {/* Tool Actions */}
+             <div className="flex bg-zinc-950/80 rounded border border-zinc-800 shadow-inner overflow-hidden">
+                <button
+                  title="Pointer tool (A)"
+                  onClick={() => setActiveTool("pointer")}
+                  className={`px-2 py-1 text-xs transition-colors ${activeTool === "pointer" ? "bg-orange-500 text-black" : "text-zinc-500 hover:text-white"}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
+                </button>
+                <button
+                  title="Blade tool (B)"
+                  onClick={() => setActiveTool("blade")}
+                  className={`px-2 py-1 flex items-center gap-1 text-[10px] font-bold uppercase transition-colors ${activeTool === "blade" ? "bg-orange-500 text-black" : "text-zinc-500 hover:text-white"}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 3v12"/><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+                  Cut
+                </button>
+             </div>
+             
+             {/* Snapping */}
+             <button
+               title="Snapping (N)"
+               onClick={() => setSnappingEnabled(p => !p)}
+               className={`px-2 py-1 rounded border transition-colors ${snappingEnabled ? "bg-orange-500/20 text-orange-400 border-orange-500/50" : "bg-zinc-800/50 text-zinc-500 border-zinc-800 hover:text-zinc-300"}`}
+             >
+               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 11V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"/><path d="M4 11v10"/><path d="M20 11v10"/><path d="M4 21h4"/><path d="M16 21h4"/></svg>
+             </button>
+
              <div className="flex items-center gap-2 bg-black/40 px-3 py-1 rounded border border-zinc-800">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-500"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
                 <input 
@@ -1090,20 +1349,42 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
               return (
                 <div
                   key={el.id}
-                  onMouseDown={(e) => handleBlockMouseDown(e, el.id)}
-                  className={`absolute h-[52px] border rounded text-[10px] p-2 overflow-hidden cursor-grab active:cursor-grabbing hover:brightness-125 transition-colors z-10 
+                  onClick={(e) => handleClipClick(e, el.id)}
+                  className={`absolute h-[52px] border rounded text-[10px] p-2 overflow-hidden transition-colors z-10 
                           ${isSelected ? selColor : baseColor}
+                          ${activeTool === "blade" ? "cursor-[crosshair]" : "cursor-grab active:cursor-grabbing"}
                        `}
                   style={{ left, width, top }}
                 >
-                  <div className={`font-bold truncate ${el.type === "location" ? "text-orange-400" : "text-indigo-400"}`}>
+                  <div
+                    onMouseDown={(e) => handleBlockMouseDown(e, el.id)}
+                    className="absolute inset-0 z-0"
+                  />
+                  
+                  {/* Left Trim Handle */}
+                  <div 
+                    onMouseDown={(e) => handleTrimMouseDown(e, el.id, "left")}
+                    className="absolute left-0 top-0 bottom-0 w-2 hover:bg-orange-500/50 cursor-col-resize z-20 flex items-center justify-center opacity-0 hover:opacity-100"
+                  >
+                     <div className="w-[1px] h-3 bg-white" />
+                  </div>
+                  
+                  {/* Right Trim Handle */}
+                  <div 
+                    onMouseDown={(e) => handleTrimMouseDown(e, el.id, "right")}
+                    className="absolute right-0 top-0 bottom-0 w-2 hover:bg-orange-500/50 cursor-col-resize z-20 flex items-center justify-center opacity-0 hover:opacity-100"
+                  >
+                     <div className="w-[1px] h-3 bg-white" />
+                  </div>
+
+                  <div className={`relative z-10 font-bold truncate pointer-events-none ${el.type === "location" ? "text-orange-400" : "text-indigo-400"}`}>
                     {el.name}
                   </div>
                   {el.type === "effect_detail" && el.effectPayload && (
-                    <div className="text-[8px] text-zinc-400 mt-1">Detail: {el.effectPayload.detailLevel}%</div>
+                    <div className="relative z-10 text-[8px] text-zinc-400 mt-1 pointer-events-none">Detail: {el.effectPayload.detailLevel}%</div>
                   )}
                   {el.type === "location" && el.locationPayload && (
-                    <div className="mt-1 flex w-full h-1 bg-black/40 rounded-full overflow-hidden">
+                    <div className="relative z-10 mt-1 flex w-full h-1 bg-black/40 rounded-full overflow-hidden pointer-events-none">
                       <div className="h-full opacity-60" style={{ backgroundColor: el.locationPayload.color, width: '100%' }} />
                     </div>
                   )}
