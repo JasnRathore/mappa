@@ -1,3 +1,5 @@
+import type { Geometry } from "geojson";
+
 export interface ProjectSettings {
   width: number;
   height: number;
@@ -24,7 +26,7 @@ export interface LocationPayload {
   color?: string;
   type?: string;
   display_name?: string;
-  geojson?: Record<string, unknown>;
+  geojson?: Geometry;
   bearing?: number;
   pitch?: number;
   transition?: string; // "fly", "ease", "jump", "pan", "zoom_in", "zoom_out", "rotate", "tilt", "fit_bounds"

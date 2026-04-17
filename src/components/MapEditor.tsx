@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { Geometry } from "geojson";
 import type { ProjectSettings, TimelineElement, LocationPayload, Marker } from "../types";
+import { saveRenderData } from "../db";
+import { applyDeterministicTimelineFrameToMap, createMapPlaybackCache } from "../lib/mapPlayback";
 
 interface Props {
   project: ProjectSettings;
@@ -13,6 +16,16 @@ interface Props {
 
 const TRACK_HEIGHT = 60;
 const TRACK_COUNT = 4;
+const PREVIEW_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
+  fadeDuration: 0,
+  refreshExpiredTiles: false,
+  canvasContextAttributes: {
+    antialias: false,
+    preserveDrawingBuffer: true,
+    powerPreference: "high-performance",
+    desynchronized: true,
+  },
+};
 
 const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, setTimelineElements, onImport }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -26,14 +39,10 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     const [activeElementId, setActiveElementId] = useState<string | null>(null);
 
   const currentFrameRef = useRef(project.startFrame);
-  // Optional: keep a state for things that REALLY need a react render, but we avoid updating this in playback loops
-  const [, forceRender] = useState(0); 
-
   const [isPlaying, setIsPlaying] = useState(false);
 
   const [timelineZoom, setTimelineZoom] = useState(2);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const playheadMarkerRef = useRef<HTMLDivElement>(null);
 
   const [markers, setMarkers] = useState<Marker[]>(project.markers || []);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
@@ -46,11 +55,12 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
   const viewAreaRef = useRef<HTMLDivElement>(null);
   const [viewScale, setViewScale] = useState(1);
+  const [canvasZoom, setCanvasZoom] = useState(1);
 
   const timecodeLabelRef = useRef<HTMLDivElement>(null);
   const playheadLineRef = useRef<HTMLDivElement>(null);
   const playheadLabelRef = useRef<HTMLDivElement>(null);
-  const lastGeoJSON = useRef<string>("");
+  const playbackCacheRef = useRef(createMapPlaybackCache());
 
   useEffect(() => {
     setProject(prev => prev ? { ...prev, markers } : null);
@@ -82,8 +92,6 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     return closest;
   }, [snappingEnabled, getSnapTargets, timelineZoom]);
 
-  const lastActiveLocationId = useRef<string | null>(null);
-  const lastDetailLevel = useRef<number | null>(null);
   // store initial drag context
   const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
 
@@ -96,10 +104,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       style: "https://tiles.openfreemap.org/styles/positron",
       center: [0, 20],
       zoom: 1.5,
-      antialias: true,
-      preserveDrawingBuffer: true,
+      ...PREVIEW_MAP_OPTIONS,
       pixelRatio: 1, // FORCE 1:1 CSS pixels to internal canvas pixels!
-    });
+    } as maplibregl.MapOptions);
 
     map.current.on("load", () => {
       if (!map.current) return;
@@ -138,7 +145,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   useEffect(() => {
     if (!viewAreaRef.current) return;
     const observer = new ResizeObserver((entries) => {
-      for (let entry of entries) {
+      for (const entry of entries) {
         // Subtract padding (e.g. 48px to account for p-6 which is 24px padding on each side)
         const availW = entry.contentRect.width - 48;
         // Subtract extra vertical space for the top absolute bar
@@ -178,138 +185,13 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   // 3. MAP STATE UPDATE
   const updateMapState = useCallback((frameIndex: number) => {
     if (!map.current) return;
-
-    const activeElements = timelineElements.filter(
-      (el) => frameIndex >= el.startFrame && frameIndex < el.startFrame + el.durationFrames
-    );
-
-    const activeLocations = activeElements.filter((el) => el.type === "location");
-    const activeEffect = activeElements
-      .filter((el) => el.type === "effect_detail")
-      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
-    
-    // Camera Focus Logic:
-    const startingLocations = activeLocations
-      .filter(el => el.startFrame === frameIndex)
-      .sort((a, b) => b.trackIndex - a.trackIndex);
-    
-    const topActiveLocation = activeLocations
-      .sort((a, b) => b.trackIndex - a.trackIndex)[0];
-
-    // Decide which element should control the camera
-    let cameraElement = startingLocations.length > 0 ? startingLocations[0] : topActiveLocation;
-
-    const locKey = cameraElement ? `${cameraElement.id}-${cameraElement.locationPayload?.zoom}-${cameraElement.locationPayload?.bearing}-${cameraElement.locationPayload?.pitch}-${cameraElement.locationPayload?.transition}-${cameraElement.locationPayload?.color}-${JSON.stringify(cameraElement.locationPayload?.center)}` : null;
-
-    if (locKey !== lastActiveLocationId.current) {
-      lastActiveLocationId.current = locKey;
-
-      if (cameraElement && cameraElement.locationPayload) {
-        const loc = cameraElement.locationPayload;
-        const transition = loc.transition || "fly";
-        
-        const clipMs = (cameraElement.durationFrames / project.fps) * 1000;
-        const duration = loc.transitionMS || Math.min(2000, clipMs);
-
-        const options = {
-          center: loc.center,
-          zoom: loc.zoom,
-          bearing: loc.bearing || 0,
-          pitch: loc.pitch || 0,
-          duration: duration,
-          essential: true
-        };
-
-        switch (transition) {
-          case "jump": map.current.jumpTo(options as any); break;
-          case "ease": map.current.easeTo(options); break;
-          case "pan": map.current.panTo(loc.center as any, { duration, essential: true }); break;
-          case "rotate": map.current.easeTo(options); break;
-          case "tilt": map.current.easeTo(options); break;
-          case "zoom_in": map.current.flyTo({ ...options, zoom: loc.zoom + 1 }); break;
-          case "zoom_out": map.current.flyTo({ ...options, zoom: loc.zoom - 1 }); break;
-          case "fit_bounds": map.current.flyTo(options); break;
-          case "fly":
-          default: map.current.flyTo(options); break;
-        }
-      }
-    }
-
-    // Update ALL Highlights
-    if (map.current.isStyleLoaded()) {
-      const source = map.current.getSource("city-area") as maplibregl.GeoJSONSource;
-      if (source) {
-        const features = activeLocations.map(el => {
-          let alpha = 0.4;
-          const loc = el.locationPayload;
-          if (loc?.highlightEnabled === false) {
-             alpha = 0;
-          } else if (loc) {
-             const fi = loc.fadeInFrames || 0;
-             const fo = loc.fadeOutFrames || 0;
-             const frameIn = frameIndex - el.startFrame;
-             const frameOut = (el.startFrame + el.durationFrames) - frameIndex;
-             
-             if (fi > 0 && frameIn < fi) {
-               alpha = 0.4 * (frameIn / fi);
-             } else if (fo > 0 && frameOut <= fo) {
-               alpha = 0.4 * (frameOut / fo);
-             }
-          }
-          
-          return {
-            type: "Feature",
-            properties: { 
-              color: loc?.color || "#f97316",
-              opacity: alpha
-            },
-            geometry: loc?.geojson || { type: "Point", coordinates: loc?.center },
-          };
-        });
-        
-        const stringified = JSON.stringify(features);
-        if (lastGeoJSON.current !== stringified) {
-           lastGeoJSON.current = stringified;
-           if (features.length > 0) {
-             source.setData({
-               type: "FeatureCollection",
-               features: features as any,
-             });
-           } else {
-             source.setData({ type: "FeatureCollection", features: [] });
-           }
-        }
-      }
-    }
-
-    const detailLevel = activeEffect?.effectPayload?.detailLevel ?? 100;
-
-    if (detailLevel !== lastDetailLevel.current) {
-      lastDetailLevel.current = detailLevel;
-      if (map.current.isStyleLoaded()) {
-        const style = map.current.getStyle();
-        if (style && style.layers) {
-          style.layers.forEach((layer) => {
-            const isLabel = layer.id.includes("label") || layer.id.includes("place");
-            const isTransit =
-              layer.id.includes("rail") ||
-              layer.id.includes("transit") ||
-              layer.id.includes("airport");
-            const isSmallRoad = layer.id.includes("road") && !layer.id.includes("motorway");
-            const isBuilding = layer.id.includes("building");
-
-            let visible = "visible";
-            if (detailLevel < 30) {
-              if (isLabel || isTransit || isSmallRoad || isBuilding) visible = "none";
-            } else if (detailLevel < 70) {
-              if (isSmallRoad || isBuilding) visible = "none";
-            }
-
-            map.current?.setLayoutProperty(layer.id, "visibility", visible);
-          });
-        }
-      }
-    }
+    applyDeterministicTimelineFrameToMap({
+      map: map.current,
+      frameIndex,
+      timelineElements,
+      fps: project.fps,
+      cache: playbackCacheRef.current,
+    });
   }, [timelineElements, project.fps]);
 
   useEffect(() => {
@@ -326,7 +208,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   useEffect(() => {
     if (!map.current) return;
     
-    const handleMapUserInteraction = (e: any) => {
+    const handleMapUserInteraction = (e: { originalEvent?: Event }) => {
       // originalEvent only exists if the interaction was caused by a user (drag, scroll), not code (flyTo)
       if (!e.originalEvent) return;
       
@@ -393,7 +275,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         transitionMS: 2000,
         type: item.type as string,
         color: "#f97316",
-        geojson: item.geojson as Record<string, unknown>,
+        geojson: item.geojson as Geometry | undefined,
       }));
       setSearchResults(formatted);
     } catch (err) {
@@ -533,7 +415,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       const { startX, origStart, origDuration, edge } = trimState.current;
 
       const deltaX = e.clientX - startX;
-      let frameDelta = Math.round(deltaX / timelineZoom);
+      const frameDelta = Math.round(deltaX / timelineZoom);
 
       setTimelineElements(prev => prev.map(el => {
         if (el.id !== trimmingElementId) return el;
@@ -616,10 +498,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     if (!timelineRef.current) return;
     const oldZoom = timelineZoom;
     const scrollLeft = timelineRef.current.scrollLeft;
-    const viewportWidth = timelineRef.current.clientWidth;
     
     // Calculate where the playhead is relative to the viewport
-    const playheadX = currentFrame * oldZoom;
+    const playheadX = currentFrameRef.current * oldZoom;
     const relativeX = playheadX - scrollLeft;
 
     setTimelineZoom(newZoom);
@@ -627,11 +508,23 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     // Maintain the playhead's relative position in the viewport
     requestAnimationFrame(() => {
       if (timelineRef.current) {
-        const newPlayheadX = currentFrame * newZoom;
+        const newPlayheadX = currentFrameRef.current * newZoom;
         timelineRef.current.scrollLeft = newPlayheadX - relativeX;
       }
     });
   };
+
+  const handleCanvasZoomChange = useCallback((newZoom: number) => {
+    const clamped = Math.max(0.5, Math.min(4, Number(newZoom.toFixed(2))));
+    setCanvasZoom(clamped);
+  }, []);
+
+  const handleCanvasWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (!e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleCanvasZoomChange(canvasZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+  }, [canvasZoom, handleCanvasZoomChange]);
 
   const updateActiveElement = (updates: Partial<TimelineElement>) => {
     setTimelineElements(prev => prev.map(el =>
@@ -808,16 +701,22 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
   const startRecording = () => {
     try {
-      localStorage.setItem("mappa-render-data", JSON.stringify({ project, timelineElements }));
-      const win = window.open("?mode=render", "_blank");
-      if (!win) {
-        alert("Popup blocked! Please allow popups for this site to start the render engine.");
-      } else {
-        alert("A render tab has been opened. Please KEEP THAT TAB FOCUSED AND VISIBLE to ensure the video renders at full speed.");
-      }
+      saveRenderData({ project, timelineElements })
+        .then(() => {
+          const win = window.open("?mode=render", "_blank");
+          if (!win) {
+            alert("Popup blocked! Please allow popups for this site to start the render engine.");
+          } else {
+            alert("A render tab has been opened. Please KEEP THAT TAB FOCUSED AND VISIBLE to ensure the video renders at full speed.");
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to persist render payload", err);
+          alert("Failed to store render data in IndexedDB. Your browser may be blocking local database access.");
+        });
     } catch (err) {
       console.error("Failed to start render", err);
-      alert("Project data is too large for browser storage. Try reducing the number of high-detail GeoJSON clips or splitting the project.");
+      alert("Failed to start render. Check browser storage permissions and try again.");
     }
   };
 
@@ -868,7 +767,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
                 className="p-3 bg-zinc-800/50 border border-zinc-700 rounded-md cursor-grab active:cursor-grabbing hover:border-orange-500/50"
               >
                 <div className="flex justify-between items-center mb-1">
-                  <span className="text-xs font-bold text-zinc-200 truncate">{loc.name}</span>
+                  <span className="text-xs font-bold text-zinc-200 truncate">{loc.display_name}</span>
                   <span className="text-[8px] px-1 bg-orange-500/10 text-orange-400 rounded border border-orange-500/20">
                     {loc.type}
                   </span>
@@ -886,6 +785,41 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           <div className="absolute top-4 left-6 z-10 flex gap-4 items-center">
             <div className="bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 text-[10px] font-mono shadow-xl text-zinc-400">
               {project.width}x{project.height} @ {project.fps}FPS
+            </div>
+
+            <div className="flex items-center gap-2 bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 shadow-xl">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-500">Canvas</span>
+              <button
+                onClick={() => handleCanvasZoomChange(canvasZoom - 0.1)}
+                className="w-5 h-5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+              >
+                -
+              </button>
+              <input
+                type="range"
+                min="0.5"
+                max="4"
+                step="0.1"
+                value={canvasZoom}
+                onChange={(e) => handleCanvasZoomChange(parseFloat(e.target.value))}
+                className="w-24 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+              />
+              <button
+                onClick={() => handleCanvasZoomChange(canvasZoom + 0.1)}
+                className="w-5 h-5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+              >
+                +
+              </button>
+              <button
+                onClick={() => handleCanvasZoomChange(1)}
+                className="px-2 py-0.5 rounded border border-zinc-700 text-[9px] font-bold uppercase text-zinc-400 hover:text-white hover:border-zinc-500"
+              >
+                Fit
+              </button>
+              <span className="w-10 text-right text-[10px] font-mono text-orange-400">
+                {Math.round(canvasZoom * 100)}%
+              </span>
+              <span className="text-[9px] text-zinc-500">Alt+Wheel</span>
             </div>
             
             <div className="flex bg-zinc-950/80 rounded border border-zinc-700 shadow-xl overflow-hidden divide-x divide-zinc-800">
@@ -922,18 +856,28 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
             </div>
           </div>
 
-          <div className="relative flex-1 w-full flex items-center justify-center overflow-hidden">
-            <div
-              ref={mapCenterWrapper}
-              className="relative shadow-2xl bg-zinc-900 border border-zinc-800 overflow-hidden"
-              style={{
-                width: `${project.width}px`,
-                height: `${project.height}px`,
-                transform: `scale(${viewScale})`,
-                transformOrigin: 'center center'
-              }}
-            >
-              <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
+          <div className="relative flex-1 w-full overflow-auto" onWheelCapture={handleCanvasWheel}>
+            <div className="flex min-w-full min-h-full items-center justify-center">
+              <div
+                ref={mapCenterWrapper}
+                className="relative shadow-2xl bg-zinc-900 border border-zinc-800 overflow-hidden"
+                style={{
+                  width: `${project.width * viewScale * canvasZoom}px`,
+                  height: `${project.height * viewScale * canvasZoom}px`,
+                }}
+              >
+                <div
+                  className="absolute left-0 top-0"
+                  style={{
+                    width: `${project.width}px`,
+                    height: `${project.height}px`,
+                    transform: `scale(${viewScale * canvasZoom})`,
+                    transformOrigin: "top left",
+                  }}
+                >
+                  <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
+                </div>
+              </div>
             </div>
           </div>
         </main>

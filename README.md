@@ -43,6 +43,16 @@ export default defineConfig([
 ])
 ```
 
+## Native FFmpeg Rendering
+
+The app can render through a local native FFmpeg server instead of browser `MediaRecorder`.
+
+1. Install FFmpeg and make sure `ffmpeg` is available on your `PATH`.
+2. Start the native render server with `npm run render-server`.
+3. Run the app and use the normal render button.
+
+When the renderer detects `http://127.0.0.1:3030`, it will warm the timeline up twice, export the third pass frame-by-frame, and encode the output with FFmpeg. It prefers GPU encoders when available and falls back to `libx264` otherwise.
+
 You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
 ```js
