@@ -18,6 +18,13 @@
     "core:window:allow-hide",
     "dialog:default",
     "shell:default",
+    "fs:default",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        "$APPLOCALDATA/**"
+      ]
+    },
     {
       "identifier": "shell:allow-execute",
       "allow": [

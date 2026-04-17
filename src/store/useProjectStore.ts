@@ -4,6 +4,8 @@ import type { ProjectSettings, TimelineElement, Marker } from '../types';
 interface ProjectState {
   // Project Data
   project: ProjectSettings | null;
+  projectName: string;
+  filePath: string | null;
   timelineElements: TimelineElement[];
   markers: Marker[];
   
@@ -18,7 +20,7 @@ interface ProjectState {
 
 
   // Actions
-  setProject: (project: ProjectSettings | null) => void;
+  setProject: (project: ProjectSettings | null, name?: string, path?: string | null) => void;
   setTimelineElements: (elements: TimelineElement[] | ((prev: TimelineElement[]) => TimelineElement[])) => void;
   setMarkers: (markers: Marker[] | ((prev: Marker[]) => Marker[])) => void;
   setActiveElementId: (id: string | null) => void;
@@ -28,6 +30,15 @@ interface ProjectState {
   setSnappingEnabled: (enabled: boolean) => void;
   setActiveTool: (tool: "pointer" | "blade") => void;
   toggleTrackState: (trackIndex: number, property: "locked" | "hidden") => void;
+  updateProjectSettings: (updates: Partial<ProjectSettings>) => void;
+  addMarker: (frame: number) => void;
+  deleteMarker: (id: string) => void;
+  moveMarker: (id: string, frame: number) => void;
+
+  // Persistence Actions
+  saveProject: (asNewPath?: boolean) => Promise<boolean>;
+  loadProject: (path?: string) => Promise<boolean>;
+  newProject: (settings: ProjectSettings, name: string) => Promise<{ success: boolean; error?: string }>;
 
 
   // Timeline Utilities
@@ -47,6 +58,8 @@ interface ProjectState {
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   project: null,
+  projectName: "Untitled Project",
+  filePath: null,
   timelineElements: [],
   markers: [],
   
@@ -63,8 +76,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     3: { locked: false, hidden: false },
   },
 
-  setProject: (project) => set((state) => ({ 
+  setProject: (project, name, path) => set((state) => ({ 
     project, 
+    projectName: name ?? state.projectName,
+    filePath: path !== undefined ? path : state.filePath,
     currentFrame: project ? project.startFrame : 0,
     // Initialize trackStates from project if available
     trackStates: project?.trackStates 
@@ -293,4 +308,207 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }
   })),
+
+  updateProjectSettings: (updates) => set((state) => ({
+    project: state.project ? { ...state.project, ...updates } : null
+  })),
+
+  addMarker: (frame) => set((state) => {
+    const newMarker: Marker = {
+      id: `m-${Date.now()}`,
+      frame,
+      label: `Marker ${state.markers.length + 1}`,
+      color: "#3b82f6"
+    };
+    const updated = [...state.markers, newMarker];
+    return { 
+      markers: updated,
+      project: state.project ? { ...state.project, markers: updated } : null
+    };
+  }),
+
+  deleteMarker: (id) => set((state) => {
+    const updated = state.markers.filter(m => m.id !== id);
+    return {
+      markers: updated,
+      project: state.project ? { ...state.project, markers: updated } : null
+    };
+  }),
+
+  moveMarker: (id, frame) => set((state) => {
+    const updated = state.markers.map(m => m.id === id ? { ...m, frame } : m);
+    return {
+      markers: updated,
+      project: state.project ? { ...state.project, markers: updated } : null
+    };
+  }),
+
+  newProject: async (settings, name) => {
+    try {
+      const { appLocalDataDir, join } = await import('@tauri-apps/api/path');
+      const { exists, mkdir } = await import('@tauri-apps/plugin-fs');
+      
+      const localDir = await appLocalDataDir();
+      const projectsDir = await join(localDir, 'projects');
+      
+      // Ensure the projects directory exists first
+      if (!await exists(projectsDir)) {
+        await mkdir(projectsDir, { recursive: true });
+      }
+
+      const sanitized = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const potentialPath = await join(projectsDir, `${sanitized}.mappa`);
+
+      if (await exists(potentialPath)) {
+        return { success: false, error: "A project with this name already exists in your library." };
+      }
+
+      set({
+        project: settings,
+        projectName: name,
+        filePath: potentialPath,
+        timelineElements: [],
+        markers: [],
+        currentFrame: 0,
+        activeElementId: null
+      });
+
+      return { success: true };
+    } catch (err) {
+      console.error("New project error:", err);
+      return { success: false, error: "System error: Failed to initialize project storage. Check permissions." };
+    }
+  },
+
+  saveProject: async (asNewPath = false) => {
+    const { project, projectName, filePath, timelineElements, markers } = get();
+    if (!project) return false;
+
+    // Use current path if it exists and we're not Doing "Save As"
+    let targetPath = filePath;
+    
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const { writeTextFile, mkdir, exists } = await import('@tauri-apps/plugin-fs');
+    const { appLocalDataDir, join } = await import('@tauri-apps/api/path');
+
+    // If we have no path (shouldn't happen with new logic, but safety first) 
+    // or we WANT to export it somewhere else (asNewPath)
+    if (asNewPath || !targetPath) {
+      targetPath = await save({
+        title: "Export Mappa Project",
+        filters: [{ name: "Mappa Project", extensions: ["mappa", "json"] }],
+        defaultPath: targetPath || `${projectName}.mappa`
+      });
+    }
+
+    if (!targetPath) return false;
+
+    try {
+      // Ensure directory exists
+      const localDir = await appLocalDataDir();
+      const projectsDir = await join(localDir, 'projects');
+      if (!await exists(projectsDir)) {
+        await mkdir(projectsDir, { recursive: true });
+      }
+
+      const data = JSON.stringify({
+        version: 1,
+        projectName,
+        project,
+        timelineElements,
+        markers
+      }, null, 2);
+
+      await writeTextFile(targetPath, data);
+      
+      const fileName = targetPath.split(/[\\/]/).pop() || projectName;
+      const strippedName = fileName.replace(/\.mappa$|\.json$/, "");
+
+      if (!asNewPath) {
+        set({ filePath: targetPath, projectName: strippedName });
+      }
+      
+      // Update Recent Registry
+      updateRecentProjectsRegistry({
+        name: strippedName,
+        path: targetPath,
+        lastModified: Date.now()
+      });
+
+      return true;
+    } catch (err) {
+      console.error("Failed to save project:", err);
+      return false;
+    }
+  },
+
+  loadProject: async (specificPath) => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+
+    let targetPath = specificPath;
+    if (!targetPath) {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Mappa Project", extensions: ["mappa", "json"] }]
+      });
+      if (!selected || Array.isArray(selected)) return false;
+      targetPath = selected;
+    }
+
+    try {
+      const dataStr = await readTextFile(targetPath);
+      const data = JSON.parse(dataStr);
+      
+      if (data.project && Array.isArray(data.timelineElements)) {
+        const fileName = targetPath.split(/[\\/]/).pop() || data.projectName || "Untitled";
+        const strippedName = fileName.replace(/\.mappa$|\.json$/, "");
+
+        set({
+          project: data.project,
+          projectName: strippedName,
+          filePath: targetPath,
+          timelineElements: data.timelineElements,
+          markers: data.markers || []
+        });
+
+        updateRecentProjectsRegistry({
+          name: strippedName,
+          path: targetPath,
+          lastModified: Date.now()
+        });
+
+        return true;
+      }
+    } catch (err) {
+      console.error("Failed to load project:", err);
+    }
+    return false;
+  }
 }));
+
+// --- Recent Projects Registry Helper ---
+export interface RecentProject {
+  name: string;
+  path: string;
+  lastModified: number;
+}
+
+const REGISTRY_KEY = "mappa_recent_projects";
+
+export const getRecentProjects = (): RecentProject[] => {
+  const data = localStorage.getItem(REGISTRY_KEY);
+  if (!data) return [];
+  try {
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+};
+
+const updateRecentProjectsRegistry = (project: RecentProject) => {
+  const recent = getRecentProjects();
+  const filtered = recent.filter(p => p.path !== project.path);
+  const updated = [project, ...filtered].slice(0, 10); // Keep top 10
+  localStorage.setItem(REGISTRY_KEY, JSON.stringify(updated));
+};

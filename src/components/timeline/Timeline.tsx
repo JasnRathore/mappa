@@ -20,6 +20,7 @@ const TRACK_HEIGHT = 48;
 export const Timeline: React.FC = () => {
   const {
     project,
+    currentFrame,
     setTimelineElements,
     timelineZoom,
     setTimelineZoom,
@@ -27,11 +28,29 @@ export const Timeline: React.FC = () => {
     setActiveTool,
     snappingEnabled,
     setSnappingEnabled,
+    addMarker,
+    updateProjectSettings,
   } = useProjectStore();
 
   if (!project) return null;
 
   const totalWidth = project.durationFrames * timelineZoom;
+
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      if (e.key.toLowerCase() === "m") {
+        addMarker(currentFrame);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [addMarker, currentFrame]);
 
   return (
       <div
@@ -86,11 +105,34 @@ export const Timeline: React.FC = () => {
 
             <button
               title="Add Marker (M)"
-              onClick={() => alert("Markers support coming soon...")}
+              onClick={() => addMarker(currentFrame)}
               className="h-6 w-6 flex items-center justify-center rounded transition-colors text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
             >
               <MapPin size={13} weight="fill" />
             </button>
+
+            <div className="w-px h-4 bg-zinc-700 mx-1" />
+
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">Start</span>
+                <input
+                  type="number"
+                  value={project.startFrame}
+                  onChange={(e) => updateProjectSettings({ startFrame: Math.max(0, Number(e.target.value)) })}
+                  className="w-12 h-5 bg-zinc-800 border-none rounded text-[10px] font-mono text-zinc-300 text-center outline-none focus:ring-1 focus:ring-primary/50"
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-tighter">End</span>
+                <input
+                  type="number"
+                  value={project.endFrame}
+                  onChange={(e) => updateProjectSettings({ endFrame: Math.max(project.startFrame + 1, Number(e.target.value)) })}
+                  className="w-12 h-5 bg-zinc-800 border-none rounded text-[10px] font-mono text-zinc-300 text-center outline-none focus:ring-1 focus:ring-primary/50"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Right: Zoom slider */}

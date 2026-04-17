@@ -29,7 +29,24 @@ import { DraggableEffectItem } from "../panels/DraggableEffectItem";
 const TRACK_HEADER_WIDTH = 96;
 
 export const Workspace: React.FC = () => {
-  const { project, isPlaying, setIsPlaying, setFrame, deleteTimelineElement, rippleDeleteTimelineElement, activeElementId, timelineElements, setTimelineElements, timelineZoom, trackStates } = useProjectStore();
+  const { 
+    project, 
+    projectName,
+    filePath,
+    saveProject,
+    loadProject,
+    isPlaying, 
+    setIsPlaying, 
+    setFrame, 
+    deleteTimelineElement, 
+    rippleDeleteTimelineElement, 
+    activeElementId, 
+    timelineElements, 
+    setTimelineElements, 
+    timelineZoom, 
+    trackStates,
+    setProject
+  } = useProjectStore();
   
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -156,6 +173,12 @@ export const Workspace: React.FC = () => {
       } else if (e.key === "ArrowRight") {
         const currentFrame = useProjectStore.getState().currentFrame;
         setFrame(Math.min(project.durationFrames - 1, currentFrame + 1));
+      } else if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveProject();
+      } else if (e.key === "o" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        loadProject();
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
@@ -185,16 +208,19 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const handleExportJSON = () => {
-    if (!project) return;
-    const dataStr = JSON.stringify({ project, timelineElements }, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `project_${project.id}_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleSave = async () => {
+    const success = await saveProject();
+    if (success) {
+      // Maybe show a toast later
+    }
+  };
+
+  const handleOpen = async () => {
+    await loadProject();
+  };
+
+  const handleNewProject = () => {
+    setProject(null);
   };
 
   if (!project) return null;
@@ -213,11 +239,18 @@ export const Workspace: React.FC = () => {
         </div>
         
         <div className="flex space-x-2">
-          {/* Menu items can go here later */}
-          <Button variant="outline" size="sm" onClick={handleExportJSON}>
-            <Export size={14} className="mr-1" /> Export JSON
+          <Button variant="ghost" size="sm" onClick={handleNewProject} className="text-xs h-7 px-2">
+            Project Manager
           </Button>
-          <Button variant="secondary" size="sm" onClick={handleDeliver}>
+          <div className="h-4 w-px bg-border my-1.5" />
+          <Button variant="ghost" size="sm" onClick={handleOpen} className="text-xs h-7 px-2">
+            Open
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleSave} className="text-xs h-7 px-2 border-orange-500/30 text-orange-400 hover:bg-orange-500/10">
+            <Export size={12} className="mr-1.5" /> Save
+          </Button>
+          <div className="h-4 w-px bg-border my-1.5" />
+          <Button variant="secondary" size="sm" onClick={handleDeliver} className="h-7 px-4">
             Deliver
           </Button>
         </div>

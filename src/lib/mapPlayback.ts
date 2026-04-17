@@ -22,6 +22,7 @@ export interface MapPlaybackCache {
   lastCameraKey: string | null;
   lastDetailLevel: number | null;
   lastGeoJson: string;
+  lastCenter: [number, number] | null;
 }
 
 interface ApplyTimelineFrameParams {
@@ -37,6 +38,7 @@ export const createMapPlaybackCache = (): MapPlaybackCache => ({
   lastCameraKey: null,
   lastDetailLevel: null,
   lastGeoJson: "",
+  lastCenter: null,
 });
 
 export const applyTimelineFrameToMap = (params: ApplyTimelineFrameParams) => {
@@ -51,6 +53,7 @@ export const applyDeterministicTimelineFrameToMap = (params: ApplyTimelineFrameP
     params.fps,
     params.trackStates
   );
+
   const cameraKey = [
     cameraState.center[0].toFixed(6),
     cameraState.center[1].toFixed(6),
@@ -59,13 +62,24 @@ export const applyDeterministicTimelineFrameToMap = (params: ApplyTimelineFrameP
     cameraState.pitch.toFixed(2),
   ].join(":");
 
+  // Detect motion velocity for adaptive detail
+  let isMovingFast = false;
+  if (params.cache.lastCenter) {
+    const dx = cameraState.center[0] - params.cache.lastCenter[0];
+    const dy = cameraState.center[1] - params.cache.lastCenter[1];
+    const velocity = Math.sqrt(dx * dx + dy * dy);
+    // Threshold for "fast" movement (approx. 0.5 degrees per frame)
+    isMovingFast = velocity > 0.5;
+  }
+  params.cache.lastCenter = cameraState.center;
+
   if (params.cache.lastCameraKey !== cameraKey) {
     params.cache.lastCameraKey = cameraKey;
     params.map.stop();
     params.map.jumpTo(cameraState);
   }
 
-  applyTimelineDecorations(params);
+  applyTimelineDecorations({ ...params, isMovingFast });
 };
 
 const cameraMemo = new Map<string, CameraState>();
@@ -277,12 +291,17 @@ const applyAnimatedTimelineCamera = ({
   }
 };
 
+interface ApplyTimelineDecorationsParams extends ApplyTimelineFrameParams {
+  isMovingFast?: boolean;
+}
+
 const applyTimelineDecorations = ({
   map,
   frameIndex,
   timelineElements,
   cache,
-}: ApplyTimelineFrameParams) => {
+  isMovingFast,
+}: ApplyTimelineDecorationsParams) => {
   if (!map.isStyleLoaded()) {
     return;
   }
@@ -298,41 +317,44 @@ const applyTimelineDecorations = ({
 
   const source = map.getSource("city-area") as maplibregl.GeoJSONSource | undefined;
   if (source) {
-    const features: Feature<Geometry, { color: string; opacity: number }>[] = activeLocations.map(
-      (el) => {
-        let alpha = HIGHLIGHT_OPACITY;
-        const loc = el.locationPayload;
-        const fallbackCenter: [number, number] = loc?.center ?? [0, 0];
+    const signature = activeLocations
+      .map(el => `${el.id}:${el.locationPayload?.opacity ?? 1}`)
+      .join("|");
 
-        if (loc?.highlightEnabled === false) {
-          alpha = 0;
-        } else if (loc) {
-          const fadeInFrames = loc.fadeInFrames || 0;
-          const fadeOutFrames = loc.fadeOutFrames || 0;
-          const frameIn = frameIndex - el.startFrame;
-          const frameOut = el.startFrame + el.durationFrames - frameIndex;
+    if (signature !== cache.lastGeoJson) {
+      cache.lastGeoJson = signature;
+      const features: Feature<Geometry, { color: string; opacity: number }>[] = activeLocations.map(
+        (el) => {
+          let alpha = HIGHLIGHT_OPACITY;
+          const loc = el.locationPayload;
+          const fallbackCenter: [number, number] = loc?.center ?? [0, 0];
 
-          if (fadeInFrames > 0 && frameIn < fadeInFrames) {
-            alpha = HIGHLIGHT_OPACITY * (frameIn / fadeInFrames);
-          } else if (fadeOutFrames > 0 && frameOut <= fadeOutFrames) {
-            alpha = HIGHLIGHT_OPACITY * (frameOut / fadeOutFrames);
+          if (loc?.highlightEnabled === false) {
+            alpha = 0;
+          } else if (loc) {
+            const fadeInFrames = loc.fadeInFrames || 0;
+            const fadeOutFrames = loc.fadeOutFrames || 0;
+            const frameIn = frameIndex - el.startFrame;
+            const frameOut = el.startFrame + el.durationFrames - frameIndex;
+
+            if (fadeInFrames > 0 && frameIn < fadeInFrames) {
+              alpha = HIGHLIGHT_OPACITY * (frameIn / fadeInFrames);
+            } else if (fadeOutFrames > 0 && frameOut <= fadeOutFrames) {
+              alpha = HIGHLIGHT_OPACITY * (frameOut / fadeOutFrames);
+            }
           }
+
+          return {
+            type: "Feature",
+            properties: {
+              color: loc?.color || "#f97316",
+              opacity: alpha,
+            },
+            geometry: loc?.geojson || { type: "Point", coordinates: fallbackCenter },
+          };
         }
+      );
 
-        return {
-          type: "Feature",
-          properties: {
-            color: loc?.color || "#f97316",
-            opacity: alpha,
-          },
-          geometry: loc?.geojson || { type: "Point", coordinates: fallbackCenter },
-        };
-      }
-    );
-
-    const serialized = JSON.stringify(features);
-    if (serialized !== cache.lastGeoJson) {
-      cache.lastGeoJson = serialized;
       const featureCollection: FeatureCollection<Geometry, { color: string; opacity: number }> = {
         type: "FeatureCollection",
         features,
@@ -363,7 +385,7 @@ const applyTimelineDecorations = ({
     const isBuilding = layer.id.includes("building");
 
     let visible = "visible";
-    if (detailLevel < 30) {
+    if (isMovingFast || detailLevel < 30) {
       if (isLabel || isTransit || isSmallRoad || isBuilding) {
         visible = "none";
       }

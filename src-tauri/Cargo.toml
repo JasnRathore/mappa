@@ -28,3 +28,4 @@ tauri-plugin-dialog = "2"
 base64 = "0.22"
 tempfile = "3.10"
 uuid = { version = "1.8", features = ["v4"] }
+tauri-plugin-fs = "2"
