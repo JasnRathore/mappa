@@ -1,11 +1,18 @@
 import { useState } from "react";
 import MapEditor from "./components/MapEditor";
 import ProjectSetup from "./components/ProjectSetup";
+import MapRenderer from "./components/MapRenderer";
 import type { ProjectSettings, TimelineElement } from "./types";
 
 function App() {
+  const isRenderMode = window.location.search.includes("mode=render");
+
   const [project, setProject] = useState<ProjectSettings | null>(null);
   const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
+
+  if (isRenderMode) {
+    return <MapRenderer />;
+  }
 
   const handleLoadProject = (file: File) => {
     const reader = new FileReader();

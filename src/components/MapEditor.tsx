@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { ProjectSettings, TimelineElement, LocationPayload } from "../types";
+import type { ProjectSettings, TimelineElement, LocationPayload, Marker } from "../types";
 
 interface Props {
   project: ProjectSettings;
@@ -25,11 +25,11 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
     const [activeElementId, setActiveElementId] = useState<string | null>(null);
 
-  const [currentFrame, setCurrentFrame] = useState(project.startFrame);
+  const currentFrameRef = useRef(project.startFrame);
+  // Optional: keep a state for things that REALLY need a react render, but we avoid updating this in playback loops
+  const [, forceRender] = useState(0); 
+
   const [isPlaying, setIsPlaying] = useState(false);
-  
-  const [isRendering, setIsRendering] = useState(false);
-  const [renderProgress, setRenderProgress] = useState(0);
 
   const [timelineZoom, setTimelineZoom] = useState(2);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -44,20 +44,28 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   const [trimmingElementId, setTrimmingElementId] = useState<string | null>(null);
   const trimState = useRef<{ startX: number; origStart: number; origDuration: number; edge: "left" | "right" } | null>(null);
 
+  const viewAreaRef = useRef<HTMLDivElement>(null);
+  const [viewScale, setViewScale] = useState(1);
+
+  const timecodeLabelRef = useRef<HTMLDivElement>(null);
+  const playheadLineRef = useRef<HTMLDivElement>(null);
+  const playheadLabelRef = useRef<HTMLDivElement>(null);
+  const lastGeoJSON = useRef<string>("");
+
   useEffect(() => {
     setProject(prev => prev ? { ...prev, markers } : null);
   }, [markers]);
 
   const getSnapTargets = useCallback(() => {
     const targets = new Set<number>();
-    targets.add(currentFrame);
+    targets.add(currentFrameRef.current);
     markers.forEach(m => targets.add(m.frame));
     timelineElements.forEach(el => {
       targets.add(el.startFrame);
       targets.add(el.startFrame + el.durationFrames);
     });
     return Array.from(targets).sort((a,b)=>a-b);
-  }, [currentFrame, markers, timelineElements]);
+  }, [markers, timelineElements]);
 
   const snapFrame = useCallback((frame: number) => {
     if (!snappingEnabled) return frame;
@@ -75,12 +83,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   }, [snappingEnabled, getSnapTargets, timelineZoom]);
 
   const lastActiveLocationId = useRef<string | null>(null);
-  const lastCameraElementId = useRef<string | null>(null);
   const lastDetailLevel = useRef<number | null>(null);
   // store initial drag context
   const dragState = useRef<{ startX: number; startY: number; origStart: number; origTrack: number } | null>(null);
-  const wasRendering = useRef(false);
-  const recorderRef = useRef<MediaRecorder | null>(null);
 
   // 1. INITIALIZE VECTOR MAP
   useEffect(() => {
@@ -93,6 +98,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       zoom: 1.5,
       antialias: true,
       preserveDrawingBuffer: true,
+      pixelRatio: 1, // FORCE 1:1 CSS pixels to internal canvas pixels!
     });
 
     map.current.on("load", () => {
@@ -128,6 +134,24 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Aspect Ratio & Scale Observer
+  useEffect(() => {
+    if (!viewAreaRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        // Subtract padding (e.g. 48px to account for p-6 which is 24px padding on each side)
+        const availW = entry.contentRect.width - 48;
+        // Subtract extra vertical space for the top absolute bar
+        const availH = entry.contentRect.height - 48 - 60; 
+        const scaleX = availW / project.width;
+        const scaleY = availH / project.height;
+        setViewScale(Math.min(scaleX, scaleY));
+      }
+    });
+    observer.observe(viewAreaRef.current);
+    return () => observer.disconnect();
+  }, [project.width, project.height]);
+
   // 2. PLAYBACK LOOP
   useEffect(() => {
     if (!isPlaying) return;
@@ -139,13 +163,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     const loop = (time: number) => {
       const delta = time - lastTime;
       if (delta >= msPerFrame) {
-        setCurrentFrame((prev) => {
-          const nextFrame = prev + 1;
-          if (nextFrame > project.endFrame) {
-            return project.startFrame; // Loop back to start
-          }
-          return nextFrame;
-        });
+        let nextFrame = currentFrameRef.current + 1;
+        if (nextFrame > project.endFrame) nextFrame = project.startFrame;
+        setFrameUI(nextFrame);
         lastTime = time - (delta % msPerFrame);
       }
       frameId = requestAnimationFrame(loop);
@@ -156,11 +176,11 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   }, [isPlaying, project.fps, project.durationFrames]);
 
   // 3. MAP STATE UPDATE
-  const updateMapState = useCallback(() => {
+  const updateMapState = useCallback((frameIndex: number) => {
     if (!map.current) return;
 
     const activeElements = timelineElements.filter(
-      (el) => currentFrame >= el.startFrame && currentFrame < el.startFrame + el.durationFrames
+      (el) => frameIndex >= el.startFrame && frameIndex < el.startFrame + el.durationFrames
     );
 
     const activeLocations = activeElements.filter((el) => el.type === "location");
@@ -169,9 +189,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       .sort((a, b) => b.trackIndex - a.trackIndex)[0];
     
     // Camera Focus Logic:
-    
     const startingLocations = activeLocations
-      .filter(el => el.startFrame === currentFrame)
+      .filter(el => el.startFrame === frameIndex)
       .sort((a, b) => b.trackIndex - a.trackIndex);
     
     const topActiveLocation = activeLocations
@@ -202,39 +221,16 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         };
 
         switch (transition) {
-          case "jump":
-            map.current.jumpTo({ 
-              center: loc.center, 
-              zoom: loc.zoom, 
-              bearing: loc.bearing || 0, 
-              pitch: loc.pitch || 0 
-            });
-            break;
-          case "ease":
-            map.current.easeTo(options);
-            break;
-          case "pan":
-            map.current.panTo(loc.center, { duration, essential: true });
-            break;
-          case "rotate":
-            map.current.easeTo(options);
-            break;
-          case "tilt":
-            map.current.easeTo(options);
-            break;
-          case "zoom_in":
-            map.current.flyTo({ ...options, zoom: loc.zoom + 1 });
-            break;
-          case "zoom_out":
-            map.current.flyTo({ ...options, zoom: loc.zoom - 1 });
-            break;
-          case "fit_bounds":
-            map.current.flyTo(options);
-            break;
+          case "jump": map.current.jumpTo(options as any); break;
+          case "ease": map.current.easeTo(options); break;
+          case "pan": map.current.panTo(loc.center as any, { duration, essential: true }); break;
+          case "rotate": map.current.easeTo(options); break;
+          case "tilt": map.current.easeTo(options); break;
+          case "zoom_in": map.current.flyTo({ ...options, zoom: loc.zoom + 1 }); break;
+          case "zoom_out": map.current.flyTo({ ...options, zoom: loc.zoom - 1 }); break;
+          case "fit_bounds": map.current.flyTo(options); break;
           case "fly":
-          default:
-            map.current.flyTo(options);
-            break;
+          default: map.current.flyTo(options); break;
         }
       }
     }
@@ -251,8 +247,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           } else if (loc) {
              const fi = loc.fadeInFrames || 0;
              const fo = loc.fadeOutFrames || 0;
-             const frameIn = currentFrame - el.startFrame;
-             const frameOut = (el.startFrame + el.durationFrames) - currentFrame;
+             const frameIn = frameIndex - el.startFrame;
+             const frameOut = (el.startFrame + el.durationFrames) - frameIndex;
              
              if (fi > 0 && frameIn < fi) {
                alpha = 0.4 * (frameIn / fi);
@@ -271,13 +267,17 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           };
         });
         
-        if (features.length > 0) {
-          source.setData({
-            type: "FeatureCollection",
-            features: features as any,
-          });
-        } else {
-          source.setData({ type: "FeatureCollection", features: [] });
+        const stringified = JSON.stringify(features);
+        if (lastGeoJSON.current !== stringified) {
+           lastGeoJSON.current = stringified;
+           if (features.length > 0) {
+             source.setData({
+               type: "FeatureCollection",
+               features: features as any,
+             });
+           } else {
+             source.setData({ type: "FeatureCollection", features: [] });
+           }
         }
       }
     }
@@ -310,18 +310,18 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         }
       }
     }
-  }, [currentFrame, timelineElements]);
+  }, [timelineElements, project.fps]);
 
   useEffect(() => {
-    updateMapState();
+    updateMapState(currentFrameRef.current);
   }, [updateMapState]);
 
 
   // 3b. AUTO-CAPTURE FROM MAP INTERACTION
-  const editorStateRef = useRef({ activeElementId, currentFrame, timelineElements });
+  const editorStateRef = useRef({ activeElementId, timelineElements });
   useEffect(() => {
-    editorStateRef.current = { activeElementId, currentFrame, timelineElements };
-  }, [activeElementId, currentFrame, timelineElements]);
+    editorStateRef.current = { activeElementId, timelineElements };
+  }, [activeElementId, timelineElements]);
 
   useEffect(() => {
     if (!map.current) return;
@@ -337,7 +337,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       if (!el || el.type !== "location") return;
       
       // Auto-capture ONLY if playhead is strictly inside this clip boundaries
-      if (state.currentFrame >= el.startFrame && state.currentFrame < el.startFrame + el.durationFrames) {
+      if (currentFrameRef.current >= el.startFrame && currentFrameRef.current < el.startFrame + el.durationFrames) {
         if (!map.current) return;
         const center = map.current.getCenter();
         
@@ -429,7 +429,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         if (payload && payload.type) {
           const newEl: TimelineElement = {
             id: `clip-${Date.now()}`,
-            name: payload.name || "Location",
+            name: payload.display_name || "Location",
             type: "location",
             trackIndex: targetTrack,
             startFrame,
@@ -449,8 +449,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       id: `effect-${Date.now()}`,
       name: "Detail Overlay",
       type: "effect_detail",
-      trackIndex: 0, // Put on top track usually
-      startFrame: currentFrame,
+      trackIndex: 0,
+      startFrame: currentFrameRef.current,
       durationFrames: project.fps * 5,
       effectPayload: { detailLevel: 50 },
     };
@@ -686,6 +686,29 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     setActiveElementId(null);
   }, [activeElementId, timelineElements]);
 
+  const formatTimecode = (frames: number) => {
+    const totalSecs = frames / project.fps;
+    const mins = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+    const secs = Math.floor(totalSecs % 60).toString().padStart(2, '0');
+    const ff = Math.floor(frames % project.fps).toString().padStart(2, '0');
+    return `${mins}:${secs}:${ff}`;
+  };
+
+  const setFrameUI = useCallback((frame: number) => {
+    currentFrameRef.current = frame;
+    if (playheadLineRef.current) {
+      playheadLineRef.current.style.left = `${frame * timelineZoom}px`;
+    }
+    if (playheadLabelRef.current) {
+      playheadLabelRef.current.style.left = `${frame * timelineZoom}px`;
+      playheadLabelRef.current.children[0].textContent = String(frame);
+    }
+    if (timecodeLabelRef.current) {
+      timecodeLabelRef.current.textContent = formatTimecode(frame);
+    }
+    updateMapState(frame);
+  }, [timelineZoom, updateMapState, project.fps]);
+
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
@@ -698,7 +721,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       } else if (e.key.toLowerCase() === "m") {
         const newMarker: Marker = {
           id: `marker-${Date.now()}`,
-          frame: currentFrame,
+          frame: currentFrameRef.current,
           label: "Marker",
           color: "#ef4444",
         };
@@ -710,24 +733,24 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
       } else if (e.key.toLowerCase() === "n") {
         setSnappingEnabled(prev => !prev);
       } else if (e.key === "ArrowLeft") {
-        setCurrentFrame(prev => Math.max(0, prev - 1));
+        setFrameUI(Math.max(0, currentFrameRef.current - 1));
       } else if (e.key === "ArrowRight") {
-        setCurrentFrame(prev => Math.min(project.durationFrames - 1, prev + 1));
+        setFrameUI(Math.min(project.durationFrames - 1, currentFrameRef.current + 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        const targets = getSnapTargets().filter(t => t < currentFrame);
-        if (targets.length > 0) setCurrentFrame(targets[targets.length - 1]);
-        else setCurrentFrame(0);
+        const targets = getSnapTargets().filter(t => t < currentFrameRef.current);
+        if (targets.length > 0) setFrameUI(targets[targets.length - 1]);
+        else setFrameUI(0);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        const targets = getSnapTargets().filter(t => t > currentFrame);
-        if (targets.length > 0) setCurrentFrame(targets[0]);
-        else setCurrentFrame(project.durationFrames - 1);
+        const targets = getSnapTargets().filter(t => t > currentFrameRef.current);
+        if (targets.length > 0) setFrameUI(targets[0]);
+        else setFrameUI(project.durationFrames - 1);
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [deleteActiveElement, rippleDeleteActiveElement, currentFrame, getSnapTargets]);
+  }, [deleteActiveElement, rippleDeleteActiveElement, getSnapTargets, setFrameUI]);
 
   const activeElement = timelineElements.find(e => e.id === activeElementId);
 
@@ -751,8 +774,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     }
     if (frame < 0) frame = 0;
     if (frame >= project.durationFrames) frame = project.durationFrames - 1;
-    setCurrentFrame(frame);
-  }, [project.durationFrames]);
+    setFrameUI(frame);
+  }, [project.durationFrames, setFrameUI, isDraggingPlayhead, snapFrame, timelineZoom]);
 
   useEffect(() => {
     const handleMouseUp = () => setIsDraggingPlayhead(false);
@@ -773,12 +796,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
   // 5. EXPORT AND RENDER LOGIC
   const exportProjectJSON = () => {
-    const data = {
-      project,
-      timelineElements,
-      version: "1.0.0",
-      exportedAt: new Date().toISOString()
-    };
+    const data = { project, timelineElements, version: "1.0.0", exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -788,85 +806,19 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     URL.revokeObjectURL(url);
   };
 
-  const startRecording = async () => {
-    if (!map.current || isRendering) return;
-
-    const canvas = map.current.getCanvas();
-    const stream = canvas.captureStream(project.fps);
-    
-    // Attempt MP4, fallback to WebM
-    let mimeType = "video/mp4";
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = "video/webm";
-    }
-
-    const recorder = new MediaRecorder(stream, {
-      mimeType,
-      videoBitsPerSecond: 12000000 // 12Mbps for high quality
-    });
-    recorderRef.current = recorder;
-
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `mappa-render-${Date.now()}.${mimeType.includes("mp4") ? "mp4" : "webm"}`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setIsRendering(false);
-      wasRendering.current = false;
-      setIsPlaying(false);
-    };
-
-    // Prepare for rendering
-    setIsPlaying(false);
-    setCurrentFrame(project.startFrame);
-    setIsRendering(true);
-    wasRendering.current = true;
-    setRenderProgress(0);
-
-    // Wait for map to settle at frame 0 before starting recorder
-    setTimeout(() => {
-      recorder.start();
-      setIsPlaying(true);
-    }, 1000);
-  };
-
-  // Monitor rendering progress
-  useEffect(() => {
-    if (isRendering) {
-      const totalToRender = project.endFrame - project.startFrame + 1;
-      const done = currentFrame - project.startFrame;
-      setRenderProgress(Math.max(0, Math.min(100, (done / totalToRender) * 100)));
-    }
-  }, [currentFrame, isRendering, project.startFrame, project.endFrame]);
-
-  // Handle auto-stop recorder when rendering ends
-  useEffect(() => {
-    if (wasRendering.current && isPlaying && currentFrame >= project.endFrame) {
-      if (recorderRef.current && recorderRef.current.state === "recording") {
-        // Give it a small buffer to capture final frames
-        setTimeout(() => {
-          recorderRef.current?.stop();
-          setIsPlaying(false);
-        }, 500);
+  const startRecording = () => {
+    try {
+      localStorage.setItem("mappa-render-data", JSON.stringify({ project, timelineElements }));
+      const win = window.open("?mode=render", "_blank");
+      if (!win) {
+        alert("Popup blocked! Please allow popups for this site to start the render engine.");
+      } else {
+        alert("A render tab has been opened. Please KEEP THAT TAB FOCUSED AND VISIBLE to ensure the video renders at full speed.");
       }
+    } catch (err) {
+      console.error("Failed to start render", err);
+      alert("Project data is too large for browser storage. Try reducing the number of high-detail GeoJSON clips or splitting the project.");
     }
-  }, [isPlaying, currentFrame, project.endFrame]);
-
-
-  const formatTimecode = (frames: number) => {
-    const totalSecs = frames / project.fps;
-    const mins = Math.floor(totalSecs / 60).toString().padStart(2, '0');
-    const secs = Math.floor(totalSecs % 60).toString().padStart(2, '0');
-    const ff = Math.floor(frames % project.fps).toString().padStart(2, '0');
-    return `${mins}:${secs}:${ff}`;
   };
 
   return (
@@ -930,7 +882,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         </aside>
 
         {/* MAP CENTER */}
-        <main className="flex-1 relative bg-zinc-950 flex flex-col p-6 items-center justify-center overflow-hidden">
+        <main ref={viewAreaRef} className="flex-1 relative bg-zinc-950 flex flex-col p-6 items-center justify-center overflow-hidden">
           <div className="absolute top-4 left-6 z-10 flex gap-4 items-center">
             <div className="bg-zinc-950/80 px-3 py-1 rounded border border-zinc-700 text-[10px] font-mono shadow-xl text-zinc-400">
               {project.width}x{project.height} @ {project.fps}FPS
@@ -962,26 +914,27 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
                 </button>
                 <button 
                   onClick={startRecording}
-                  disabled={isRendering}
                   className="px-3 py-1 text-[9px] font-bold text-orange-500 hover:bg-orange-500 hover:text-black transition-colors uppercase flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
-                  {isRendering ? "Rendering..." : "Render MP4"}
+                  Render MP4
                 </button>
             </div>
           </div>
 
-          <div
-            ref={mapCenterWrapper}
-            className="relative border border-zinc-800 shadow-2xl rounded overflow-hidden"
-            style={{
-              aspectRatio: project.width / project.height,
-              width: '100%',
-              maxHeight: '100%',
-              maxWidth: project.width > project.height ? '100%' : `${100 / (project.height / project.width)}vh`
-            }}
-          >
-            <div ref={mapContainer} className="absolute inset-0 w-full h-full bg-zinc-900" />
+          <div className="relative flex-1 w-full flex items-center justify-center overflow-hidden">
+            <div
+              ref={mapCenterWrapper}
+              className="relative shadow-2xl bg-zinc-900 border border-zinc-800 overflow-hidden"
+              style={{
+                width: `${project.width}px`,
+                height: `${project.height}px`,
+                transform: `scale(${viewScale})`,
+                transformOrigin: 'center center'
+              }}
+            >
+              <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
+            </div>
           </div>
         </main>
 
@@ -1230,8 +1183,8 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
               )}
             </button>
-            <div className="font-mono text-sm text-zinc-300 bg-black/50 px-3 py-1 rounded border border-zinc-800">
-              {formatTimecode(currentFrame)}
+            <div ref={timecodeLabelRef} className="font-mono text-sm text-zinc-300 bg-black/50 px-3 py-1 rounded border border-zinc-800">
+              {formatTimecode(currentFrameRef.current)}
             </div>
             
             <div className="flex bg-zinc-950/80 rounded border border-zinc-800 shadow-inner overflow-hidden">
@@ -1313,12 +1266,11 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
             {/* Frame number ruler */}
             {(() => {
               const totalFrames = project.durationFrames;
-              const totalWidth = Math.max(totalFrames * timelineZoom, window.innerWidth);
               // Pick an interval so labels are ~80px apart
               const rawInterval = 80 / timelineZoom;
               const niceIntervals = [1,2,5,10,15,20,25,30,50,60,75,100,120,150,200,250,300,500,600,750,1000,1200,1500,2000,3000];
               const interval = niceIntervals.find(n => n >= rawInterval) ?? 3000;
-              const ticks: JSX.Element[] = [];
+              const ticks: React.ReactNode[] = [];
               for (let f = 0; f <= totalFrames; f += interval) {
                 const x = f * timelineZoom;
                 ticks.push(
@@ -1333,14 +1285,15 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
             {/* Playhead frame label — floats above the playhead arrow */}
             <div
+              ref={playheadLabelRef}
               className="absolute top-0 pointer-events-none z-30 flex flex-col items-center"
-              style={{ left: currentFrame * timelineZoom }}
+              style={{ left: currentFrameRef.current * timelineZoom }}
             >
               <div
                 className="relative -translate-x-1/2 bg-red-500 text-white text-[8px] font-mono font-bold px-1 py-px rounded-sm leading-tight whitespace-nowrap shadow-md"
                 style={{ top: 0 }}
               >
-                {currentFrame}
+                {currentFrameRef.current}
               </div>
             </div>
 
@@ -1352,7 +1305,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
                 style={{ left: m.frame * timelineZoom - 4 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setCurrentFrame(m.frame);
+                  setFrameUI(m.frame);
                 }}
               >
                 <div className="w-2 h-2 rotate-45 mt-1" style={{ backgroundColor: m.color }} />
@@ -1378,8 +1331,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
             {/* Playhead Line */}
             <div
+              ref={playheadLineRef}
               className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-20 pointer-events-none"
-              style={{ left: currentFrame * timelineZoom }}
+              style={{ left: currentFrameRef.current * timelineZoom }}
             >
               {/* Arrow pointing down from ruler */}
               <div className="absolute top-[-28px] left-[-4px] w-0 h-0 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-red-500" />
@@ -1454,30 +1408,6 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
           </div>
         </div>
       </footer>
-
-      {/* Rendering Overlay */}
-      {isRendering && (
-          <div className="absolute inset-0 z-[100] bg-zinc-950/90 flex flex-col items-center justify-center backdrop-blur-sm">
-             <div className="w-64 space-y-4 text-center">
-                <div className="text-orange-500 font-bold text-sm uppercase tracking-widest animate-pulse">
-                    Rendering Project
-                </div>
-                <div className="h-1 w-full bg-zinc-800 rounded-full overflow-hidden">
-                    <div 
-                        className="h-full bg-orange-500 transition-all duration-300" 
-                        style={{ width: `${renderProgress}%` }}
-                    />
-                </div>
-                <div className="text-[10px] font-mono text-zinc-500">
-                    {Math.round(renderProgress)}% COMPLETE • {currentFrame} / {project.durationFrames} FRAMES
-                </div>
-                <div className="pt-4 text-[9px] text-zinc-600 leading-relaxed italic">
-                    Please keep this tab active and visible.<br/>
-                    Do not resize the window during render.
-                </div>
-             </div>
-          </div>
-      )}
     </div>
   );
 };
