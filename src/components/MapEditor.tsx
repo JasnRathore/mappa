@@ -6,6 +6,12 @@ import type { Geometry } from "geojson";
 import type { ProjectSettings, TimelineElement, LocationPayload, Marker } from "../types";
 import { saveRenderData } from "../db";
 import { applyDeterministicTimelineFrameToMap, createMapPlaybackCache } from "../lib/mapPlayback";
+import { createTimelinePreloadKey, preloadTimelineMapResources } from "../lib/mapPreload";
+import {
+  OPEN_FREEMAP_STYLE_URL,
+  createCachedMapTransformRequest,
+  installMapResourceCacheProtocol,
+} from "../lib/mapResourceCache";
 
 interface Props {
   project: ProjectSettings;
@@ -20,6 +26,9 @@ const TRACK_COUNT = 4;
 const PREVIEW_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
   fadeDuration: 0,
   refreshExpiredTiles: false,
+  cancelPendingTileRequestsWhileZooming: false,
+  maxTileCacheZoomLevels: 12,
+  maxTileCacheSize: 1024,
   canvasContextAttributes: {
     antialias: false,
     preserveDrawingBuffer: true,
@@ -27,6 +36,9 @@ const PREVIEW_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
     desynchronized: true,
   },
 };
+const MAP_TRANSFORM_REQUEST = createCachedMapTransformRequest();
+
+installMapResourceCacheProtocol();
 
 const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, setTimelineElements, onImport }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -41,6 +53,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
   const currentFrameRef = useRef(project.startFrame);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPreloadingPlayback, setIsPreloadingPlayback] = useState(false);
 
   const [timelineZoom, setTimelineZoom] = useState(2);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -62,6 +75,7 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
   const playheadLineRef = useRef<HTMLDivElement>(null);
   const playheadLabelRef = useRef<HTMLDivElement>(null);
   const playbackCacheRef = useRef(createMapPlaybackCache());
+  const previewPreloadKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setProject(prev => prev ? { ...prev, markers } : null);
@@ -102,9 +116,10 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: "https://tiles.openfreemap.org/styles/positron",
+      style: OPEN_FREEMAP_STYLE_URL,
       center: [0, 20],
       zoom: 1.5,
+      transformRequest: MAP_TRANSFORM_REQUEST,
       ...PREVIEW_MAP_OPTIONS,
       pixelRatio: 1, // FORCE 1:1 CSS pixels to internal canvas pixels!
     } as maplibregl.MapOptions);
@@ -602,6 +617,54 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     }
     updateMapState(frame);
   }, [timelineZoom, updateMapState, project.fps]);
+
+  const handlePreviewPlaybackToggle = useCallback(async () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+
+    if (!map.current) {
+      return;
+    }
+
+    const preloadKey = createTimelinePreloadKey({
+      timelineElements,
+      fps: project.fps,
+      startFrame: project.startFrame,
+      endFrame: project.endFrame,
+    });
+
+    if (previewPreloadKeyRef.current !== preloadKey) {
+      const playbackStartFrame = currentFrameRef.current;
+      setIsPreloadingPlayback(true);
+      try {
+        await preloadTimelineMapResources({
+          map: map.current,
+          timelineElements,
+          fps: project.fps,
+          startFrame: project.startFrame,
+          endFrame: project.endFrame,
+          onProgress: (completed, total, frame) => {
+            if (timecodeLabelRef.current) {
+              timecodeLabelRef.current.textContent = `CACHE ${completed}/${total}`;
+            }
+            currentFrameRef.current = frame;
+          },
+        });
+        previewPreloadKeyRef.current = preloadKey;
+        setFrameUI(playbackStartFrame);
+      } finally {
+        setIsPreloadingPlayback(false);
+      }
+    }
+
+    setIsPlaying(true);
+  }, [isPlaying, project.endFrame, project.fps, project.startFrame, setFrameUI, timelineElements]);
+
+  useEffect(() => {
+    previewPreloadKeyRef.current = null;
+  }, [timelineElements, project.startFrame, project.endFrame, project.fps]);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -1131,8 +1194,9 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
         <div className="h-12 bg-zinc-950 border-b border-zinc-800 flex items-center px-4 justify-between">
           <div className="flex gap-4 items-center">
             <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              className={`w-8 h-8 rounded flex items-center justify-center transition-colors ${isPlaying ? 'bg-orange-500 text-black' : 'bg-zinc-800 hover:bg-zinc-700 text-white'}`}
+              onClick={() => void handlePreviewPlaybackToggle()}
+              disabled={isPreloadingPlayback}
+              className={`w-8 h-8 rounded flex items-center justify-center transition-colors disabled:opacity-40 ${isPlaying ? 'bg-orange-500 text-black' : 'bg-zinc-800 hover:bg-zinc-700 text-white'}`}
             >
               {isPlaying ? (
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>

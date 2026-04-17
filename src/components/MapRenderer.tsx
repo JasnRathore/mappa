@@ -10,11 +10,17 @@ import {
   applyTimelineFrameToMap,
   createMapPlaybackCache,
 } from "../lib/mapPlayback";
+import { createTimelinePreloadKey, preloadTimelineMapResources } from "../lib/mapPreload";
+import {
+  OPEN_FREEMAP_STYLE_URL,
+  createCachedMapTransformRequest,
+  installMapResourceCacheProtocol,
+} from "../lib/mapResourceCache";
 import type { ProjectSettings, TimelineElement } from "../types";
 
 type EncoderId = "libx264" | "h264_nvenc" | "h264_qsv" | "h264_amf";
 type QueueStatus = "queued" | "rendering" | "done" | "error";
-type RenderPhase = "idle" | "warming" | "capturing" | "encoding" | "complete" | "error";
+type RenderPhase = "idle" | "preloading" | "capturing" | "encoding" | "complete" | "error";
 type PresetId = "source" | "1080p" | "1440p" | "2160p" | "custom";
 
 interface ExportSettings {
@@ -58,6 +64,9 @@ interface ResolutionPreset {
 const RENDER_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
   fadeDuration: 0,
   refreshExpiredTiles: false,
+  cancelPendingTileRequestsWhileZooming: false,
+  maxTileCacheZoomLevels: 12,
+  maxTileCacheSize: 1024,
   canvasContextAttributes: {
     antialias: false,
     preserveDrawingBuffer: true,
@@ -88,14 +97,15 @@ const EMPTY_STATUS: RenderStatus = {
   renderedFrames: 0,
   totalFrames: 0,
 };
+const MAP_TRANSFORM_REQUEST = createCachedMapTransformRequest();
+
+installMapResourceCacheProtocol();
 
 const isTauriDesktop = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
-
-const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 const waitForAnimationFrames = (count = 1) =>
   new Promise<void>((resolve) => {
@@ -282,6 +292,8 @@ const MapRenderer: React.FC = () => {
   const previewDeterministicCacheRef = useRef(createMapPlaybackCache());
   const timelineRef = useRef<TimelineElement[]>([]);
   const queueRef = useRef<QueueItem[]>([]);
+  const previewPreloadKeyRef = useRef<string | null>(null);
+  const renderPreloadKeyRef = useRef<string | null>(null);
 
   const [project, setProject] = useState<ProjectSettings | null>(null);
   const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
@@ -295,6 +307,7 @@ const MapRenderer: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [isPreloadingPreview, setIsPreloadingPreview] = useState(false);
   const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
   const [renderStatus, setRenderStatus] = useState<RenderStatus>(EMPTY_STATUS);
   const [error, setError] = useState<string | null>(null);
@@ -307,6 +320,11 @@ const MapRenderer: React.FC = () => {
   useEffect(() => {
     queueRef.current = queueItems;
   }, [queueItems]);
+
+  useEffect(() => {
+    previewPreloadKeyRef.current = null;
+    renderPreloadKeyRef.current = null;
+  }, [timelineElements, project?.fps, project?.startFrame, project?.endFrame]);
 
   useEffect(() => {
     let cancelled = false;
@@ -352,10 +370,11 @@ const MapRenderer: React.FC = () => {
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: "https://tiles.openfreemap.org/styles/positron",
+      style: OPEN_FREEMAP_STYLE_URL,
       center: [0, 20],
       zoom: 1.5,
       pixelRatio: 1,
+      transformRequest: MAP_TRANSFORM_REQUEST,
       ...RENDER_MAP_OPTIONS,
     } as maplibregl.MapOptions);
 
@@ -618,60 +637,77 @@ const MapRenderer: React.FC = () => {
     }
   }, []);
 
-  const playWarmupPass = useCallback(
-    async (job: QueueItem, passNumber: number) => {
-      if (!mapRef.current || !project) return;
-
-      previewAnimatedCacheRef.current = createMapPlaybackCache();
-      const totalFrames = job.outFrame - job.inFrame + 1;
-      setRenderStatus({
-        phase: "warming",
-        title: `Warmup Pass ${passNumber}/2`,
-        detail: "Priming map tiles and transition state before capture.",
-        progress: 0,
-        renderedFrames: 0,
-        totalFrames,
-      });
-      updateQueueItem(job.id, {
-        status: "rendering",
-        statusText: `Warmup pass ${passNumber}/2`,
-        progress: 0,
-        error: undefined,
-      });
-
-      for (let offset = 0; offset < totalFrames; offset += 1) {
-        const frame = job.inFrame + offset;
-        applyTimelineFrameToMap({
-          map: mapRef.current,
-          frameIndex: frame,
-          timelineElements: timelineRef.current,
-          fps: project.fps,
-          cache: previewAnimatedCacheRef.current,
-        });
-
-        if (offset === 0 || offset === totalFrames - 1 || offset % Math.max(1, Math.floor(project.fps / 2)) === 0) {
-          const progress = Math.round(((offset + 1) / totalFrames) * 100);
-          setPreviewFrame(frame);
-          setRenderStatus({
-            phase: "warming",
-            title: `Warmup Pass ${passNumber}/2`,
-            detail: `Frame ${offset + 1} of ${totalFrames}`,
-            progress,
-            renderedFrames: offset + 1,
-            totalFrames,
-          });
-          updateQueueItem(job.id, {
-            progress,
-            statusText: `Warmup ${passNumber}/2 - ${offset + 1}/${totalFrames}`,
-          });
-        }
-
-        await wait(1000 / project.fps);
+  const ensureMapPreloaded = useCallback(
+    async ({
+      startFrame,
+      endFrame,
+      cacheRef,
+      queueItem,
+      previewState,
+    }: {
+      startFrame: number;
+      endFrame: number;
+      cacheRef: React.MutableRefObject<string | null>;
+      queueItem?: QueueItem;
+      previewState?: boolean;
+    }) => {
+      if (!mapRef.current || !project) {
+        return;
       }
 
-      await waitForMapSettle(mapRef.current, 600);
+      const preloadKey = createTimelinePreloadKey({
+        timelineElements: timelineRef.current,
+        fps: project.fps,
+        startFrame,
+        endFrame,
+      });
+
+      if (cacheRef.current === preloadKey) {
+        return;
+      }
+
+      const restoreFrame = previewFrame;
+      if (previewState) {
+        setIsPreloadingPreview(true);
+      }
+
+      try {
+        await preloadTimelineMapResources({
+          map: mapRef.current,
+          timelineElements: timelineRef.current,
+          fps: project.fps,
+          startFrame,
+          endFrame,
+          onProgress: (completed, total, frame) => {
+            setPreviewFrame(frame);
+            const progress = Math.round((completed / total) * 100);
+            setRenderStatus({
+              phase: "preloading",
+              title: "Caching Map Tiles",
+              detail: `Preloading camera ${completed} of ${total}`,
+              progress,
+              renderedFrames: completed,
+              totalFrames: total,
+            });
+            if (queueItem) {
+              updateQueueItem(queueItem.id, {
+                status: "rendering",
+                statusText: `Caching map - ${completed}/${total}`,
+                progress: Math.min(progress, 95),
+                error: undefined,
+              });
+            }
+          },
+        });
+        cacheRef.current = preloadKey;
+      } finally {
+        setPreviewFrame(restoreFrame);
+        if (previewState) {
+          setIsPreloadingPreview(false);
+        }
+      }
     },
-    [project, updateQueueItem]
+    [previewFrame, project, updateQueueItem]
   );
 
   const captureThirdPass = useCallback(
@@ -683,6 +719,20 @@ const MapRenderer: React.FC = () => {
       previewDeterministicCacheRef.current = createMapPlaybackCache();
       const totalFrames = job.outFrame - job.inFrame + 1;
       await waitForExactCanvasSize(mapRef.current, job.width, job.height);
+      setRenderStatus({
+        phase: "capturing",
+        title: "Recording Pass",
+        detail: "Capturing frames directly from the cached map surface.",
+        progress: 0,
+        renderedFrames: 0,
+        totalFrames,
+      });
+      updateQueueItem(job.id, {
+        status: "rendering",
+        statusText: "Capture pass",
+        progress: 0,
+        error: undefined,
+      });
 
       for (let offset = 0; offset < totalFrames; offset += 1) {
         const frame = job.inFrame + offset;
@@ -710,7 +760,7 @@ const MapRenderer: React.FC = () => {
           setPreviewFrame(frame);
           setRenderStatus({
             phase: "capturing",
-            title: "Recording Pass 3/3",
+            title: "Recording Pass",
             detail: `Captured frame ${offset + 1} of ${totalFrames}`,
             progress,
             renderedFrames: offset + 1,
@@ -767,6 +817,12 @@ const MapRenderer: React.FC = () => {
         await syncSurfaceForRender(resolvedJob.width, resolvedJob.height);
         setPreviewFrame(resolvedJob.inFrame);
         await waitForMapSettle(mapRef.current, 1500);
+        await ensureMapPreloaded({
+          startFrame: resolvedJob.inFrame,
+          endFrame: resolvedJob.outFrame,
+          cacheRef: renderPreloadKeyRef,
+          queueItem: resolvedJob,
+        });
 
         activeJobId = await invoke<string>("start_render_job", {
           fps: project.fps,
@@ -774,8 +830,6 @@ const MapRenderer: React.FC = () => {
           height: resolvedJob.height,
         });
 
-        await playWarmupPass(resolvedJob, 1);
-        await playWarmupPass(resolvedJob, 2);
         const resultPath = await captureThirdPass(resolvedJob, activeJobId, outputPath);
 
         updateQueueItem(resolvedJob.id, {
@@ -824,7 +878,7 @@ const MapRenderer: React.FC = () => {
         setActiveQueueId(null);
       }
     },
-    [captureThirdPass, ensureOutputDirectory, mapReady, playWarmupPass, project, syncSurfaceForRender, updateQueueItem]
+    [captureThirdPass, ensureMapPreloaded, ensureOutputDirectory, mapReady, project, syncSurfaceForRender, updateQueueItem]
   );
 
   const runQueuedJobs = useCallback(
@@ -883,6 +937,36 @@ const MapRenderer: React.FC = () => {
 
     await openPath(target);
   }, [exportSettings?.directory, lastExportPath, queueItems, selectedQueueId]);
+
+  const handlePreviewPlaybackToggle = useCallback(async () => {
+    if (!exportSettings || !project) {
+      return;
+    }
+
+    if (isPreviewPlaying) {
+      setIsPreviewPlaying(false);
+      return;
+    }
+
+    await ensureMapPreloaded({
+      startFrame: exportSettings.inFrame,
+      endFrame: exportSettings.outFrame,
+      cacheRef: previewPreloadKeyRef,
+      previewState: true,
+    });
+
+    previewAnimatedCacheRef.current = createMapPlaybackCache();
+    previewDeterministicCacheRef.current = createMapPlaybackCache();
+    setRenderStatus({
+      phase: "idle",
+      title: "Preview Ready",
+      detail: "Cached tiles loaded for the current range.",
+      progress: 0,
+      renderedFrames: 0,
+      totalFrames: 0,
+    });
+    setIsPreviewPlaying(true);
+  }, [ensureMapPreloaded, exportSettings, isPreviewPlaying, project]);
 
   if (isLoading) {
     return (
@@ -1117,15 +1201,11 @@ const MapRenderer: React.FC = () => {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  previewAnimatedCacheRef.current = createMapPlaybackCache();
-                  previewDeterministicCacheRef.current = createMapPlaybackCache();
-                  setIsPreviewPlaying((playing) => !playing);
-                }}
-                disabled={isRendering}
+                onClick={() => void handlePreviewPlaybackToggle()}
+                disabled={isRendering || isPreloadingPreview}
                 className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-100 flex items-center justify-center disabled:opacity-40"
               >
-                {isPreviewPlaying ? "Pause" : "Play"}
+                {isPreloadingPreview ? "Load" : isPreviewPlaying ? "Pause" : "Play"}
               </button>
               <div>
                 <div className="text-sm font-medium">{timeLabel}</div>
