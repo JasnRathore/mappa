@@ -82,38 +82,44 @@ pub async fn finish_render_job(
     app: AppHandle,
     state: State<'_, RenderState>,
     job_id: String,
+    output_path: String,
+    encoder: Option<String>,
 ) -> Result<String, String> {
     let job = {
         let mut jobs = state.active_jobs.lock().unwrap();
         jobs.remove(&job_id).ok_or_else(|| format!("Job {} not found", job_id))?
     };
 
-    let output_path = job.path.join("output.mp4");
+    let final_output_path = PathBuf::from(output_path);
+    if let Some(parent) = final_output_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
     let frames_pattern = job.path.join("frame-%06d.png");
+    let encoder_args = build_encoder_args(encoder.as_deref().unwrap_or("libx264"));
 
     // Invoke FFmpeg sidecar
+    let mut args = vec![
+        "-y".to_string(),
+        "-framerate".to_string(),
+        job.fps.to_string(),
+        "-i".to_string(),
+        frames_pattern.to_string_lossy().into_owned(),
+    ];
+    args.extend(encoder_args);
+    args.extend([
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        final_output_path.to_string_lossy().into_owned(),
+    ]);
+
     let sidecar = app
         .shell()
         .sidecar("ffmpeg")
         .map_err(|e| format!("Failed to create sidecar command: {}", e))?
-        .args([
-            "-y",
-            "-framerate",
-            &job.fps.to_string(),
-            "-i",
-            &frames_pattern.to_string_lossy(),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "slow",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            &output_path.to_string_lossy(),
-        ]);
+        .args(args);
 
     let output = sidecar
         .output()
@@ -125,7 +131,9 @@ pub async fn finish_render_job(
         return Err(format!("FFmpeg error: {}", stderr));
     }
 
-    Ok(output_path.to_string_lossy().into_owned())
+    let _ = fs::remove_dir_all(&job.path);
+
+    Ok(final_output_path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -137,4 +145,39 @@ pub async fn cleanup_render_job(
         fs::remove_dir_all(temp_dir).map_err(|e| format!("Failed to cleanup: {}", e))?;
     }
     Ok(())
+}
+
+fn build_encoder_args(encoder: &str) -> Vec<String> {
+    match encoder {
+        "h264_nvenc" => vec![
+            "-c:v".into(),
+            "h264_nvenc".into(),
+            "-preset".into(),
+            "p5".into(),
+            "-cq".into(),
+            "19".into(),
+            "-b:v".into(),
+            "0".into(),
+        ],
+        "h264_qsv" => vec![
+            "-c:v".into(),
+            "h264_qsv".into(),
+            "-global_quality".into(),
+            "20".into(),
+        ],
+        "h264_amf" => vec![
+            "-c:v".into(),
+            "h264_amf".into(),
+            "-quality".into(),
+            "quality".into(),
+        ],
+        "libx264" | _ => vec![
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "slow".into(),
+            "-crf".into(),
+            "18".into(),
+        ],
+    }
 }

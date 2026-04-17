@@ -3,10 +3,20 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "render"
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-title",
+    "core:window:allow-close",
+    "core:webview:allow-webview-close",
+    "core:window:allow-center",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "dialog:default",
     "shell:default",
     {
       "identifier": "shell:allow-execute",

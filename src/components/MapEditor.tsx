@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Geometry } from "geojson";
@@ -703,12 +704,24 @@ const MapEditor: React.FC<Props> = ({ project, setProject, timelineElements, set
     try {
       saveRenderData({ project, timelineElements })
         .then(() => {
-          const win = window.open("?mode=render", "_blank");
-          if (!win) {
-            alert("Popup blocked! Please allow popups for this site to start the render engine.");
-          } else {
-            alert("A render tab has been opened. Please KEEP THAT TAB FOCUSED AND VISIBLE to ensure the video renders at full speed.");
-          }
+          const webview = new WebviewWindow("render", {
+            url: "?mode=render",
+            title: "Mappa Renderer Engine",
+            width: 1280, // Using a reasonable default or project.width
+            height: 720,
+            resizable: true,
+            // In Tauri v2, we can't easily set width/height based on project if it's too large for screen, 
+            // but 1280x720 is a safe bet for the window itself.
+          });
+
+          webview.once("tauri://created", () => {
+            console.log("Render window created");
+          });
+
+          webview.once("tauri://error", (e) => {
+            console.error("Failed to create render window", e);
+            alert("Failed to start render engine window. Make sure you have the correct permissions.");
+          });
         })
         .catch((err) => {
           console.error("Failed to persist render payload", err);
