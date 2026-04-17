@@ -17,14 +17,25 @@ import {
   installMapResourceCacheProtocol,
 } from "../lib/mapResourceCache";
 import type { ProjectSettings, TimelineElement } from "../types";
+import { 
+  Play, 
+  Pause, 
+  Folder, 
+  Trash, 
+  Monitor, 
+  Clock, 
+  FrameCorners, 
+  Info, 
+  CheckCircle,
+  Queue,
+  Warning
+} from "@phosphor-icons/react";
 
 type EncoderId = "libx264" | "h264_nvenc" | "h264_qsv" | "h264_amf";
 type QueueStatus = "queued" | "rendering" | "done" | "error";
 type RenderPhase = "idle" | "preloading" | "capturing" | "encoding" | "complete" | "error";
-type PresetId = "source" | "1080p" | "1440p" | "2160p" | "custom";
 
 interface ExportSettings {
-  presetId: PresetId;
   fileName: string;
   directory: string;
   width: number;
@@ -54,13 +65,6 @@ interface RenderStatus {
   totalFrames: number;
 }
 
-interface ResolutionPreset {
-  id: PresetId;
-  label: string;
-  width: number;
-  height: number;
-}
-
 const RENDER_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
   fadeDuration: 0,
   refreshExpiredTiles: false,
@@ -74,13 +78,6 @@ const RENDER_MAP_OPTIONS: Partial<maplibregl.MapOptions> = {
     desynchronized: true,
   },
 };
-
-const RESOLUTION_PRESETS: ResolutionPreset[] = [
-  { id: "source", label: "Source", width: 0, height: 0 },
-  { id: "1080p", label: "1080p", width: 1920, height: 1080 },
-  { id: "1440p", label: "1440p", width: 2560, height: 1440 },
-  { id: "2160p", label: "4K UHD", width: 3840, height: 2160 },
-];
 
 const ENCODERS: Array<{ id: EncoderId; label: string; note: string }> = [
   { id: "libx264", label: "H.264 Software", note: "Most compatible" },
@@ -286,58 +283,52 @@ const syncQueuePatch = (
 
 const MapRenderer: React.FC = () => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const previewShellRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const previewAnimatedCacheRef = useRef(createMapPlaybackCache());
-  const previewDeterministicCacheRef = useRef(createMapPlaybackCache());
-  const timelineRef = useRef<TimelineElement[]>([]);
-  const queueRef = useRef<QueueItem[]>([]);
-  const previewPreloadKeyRef = useRef<string | null>(null);
-  const renderPreloadKeyRef = useRef<string | null>(null);
-
+  const previewShellRef = useRef<HTMLDivElement>(null);
+  
   const [project, setProject] = useState<ProjectSettings | null>(null);
   const [timelineElements, setTimelineElements] = useState<TimelineElement[]>([]);
   const [exportSettings, setExportSettings] = useState<ExportSettings | null>(null);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [trackStates, setTrackStates] = useState<Record<number, { locked: boolean; hidden: boolean }>>({});
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+  const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
 
   const [previewFrame, setPreviewFrame] = useState(0);
   const [previewScale, setPreviewScale] = useState(1);
   const [surfaceSize, setSurfaceSize] = useState({ width: 1280, height: 720 });
-  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [mapReady, setMapReady] = useState(false);
-  const [isRendering, setIsRendering] = useState(false);
-  const [isPreloadingPreview, setIsPreloadingPreview] = useState(false);
-  const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
+
   const [renderStatus, setRenderStatus] = useState<RenderStatus>(EMPTY_STATUS);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [isPreloadingPreview, setIsPreloadingPreview] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
-  useEffect(() => {
-    timelineRef.current = timelineElements;
-  }, [timelineElements]);
+  const queueRef = useRef<QueueItem[]>([]);
+  const timelineRef = useRef<TimelineElement[]>([]);
+  const previewAnimatedCacheRef = useRef(createMapPlaybackCache());
+  const previewDeterministicCacheRef = useRef(createMapPlaybackCache());
+  const renderPreloadKeyRef = useRef<string | null>(null);
+  const previewPreloadKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     queueRef.current = queueItems;
   }, [queueItems]);
 
   useEffect(() => {
-    previewPreloadKeyRef.current = null;
-    renderPreloadKeyRef.current = null;
-  }, [timelineElements, project?.fps, project?.startFrame, project?.endFrame]);
+    timelineRef.current = timelineElements;
+  }, [timelineElements]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
+    const init = async () => {
       try {
         const data = await loadRenderData();
-        if (cancelled) return;
-
         if (!data) {
-          setError("No render payload found. Open the editor and send a render job again.");
+          setError("No render payload found. Export from the main editor first.");
+          setIsLoading(false);
           return;
         }
 
@@ -347,23 +338,15 @@ const MapRenderer: React.FC = () => {
 
         const initialSettings = createDefaultSettings(data.project);
         setExportSettings(initialSettings);
-        setPreviewFrame(initialSettings.inFrame);
-        setSurfaceSize({ width: initialSettings.width, height: initialSettings.height });
-      } catch (loadError) {
-        if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        setPreviewFrame(data.project.startFrame);
+        setSurfaceSize({ width: data.project.width, height: data.project.height });
+        setIsLoading(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load render data.");
+        setIsLoading(false);
       }
     };
-
-    void load();
-
-    return () => {
-      cancelled = true;
-    };
+    void init();
   }, []);
 
   useEffect(() => {
@@ -976,7 +959,10 @@ const MapRenderer: React.FC = () => {
   if (isLoading) {
     return (
       <div className="h-full bg-[#111315] text-zinc-200 flex items-center justify-center">
-        <div className="text-sm tracking-[0.2em] uppercase text-zinc-500">Loading Render Session</div>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+          <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Initializing Deliver Engine</div>
+        </div>
       </div>
     );
   }
@@ -984,405 +970,372 @@ const MapRenderer: React.FC = () => {
   if (error && !project) {
     return (
       <div className="h-full bg-[#111315] text-zinc-100 p-10 flex items-center justify-center">
-        <div className="max-w-lg border border-zinc-800 bg-[#17191c] rounded-2xl p-8 space-y-3 shadow-2xl shadow-black/30">
-          <div className="text-[11px] tracking-[0.3em] uppercase text-amber-500">Renderer</div>
-          <h1 className="text-2xl font-semibold">No render payload available</h1>
-          <p className="text-sm text-zinc-400 leading-6">{error}</p>
+        <div className="max-w-md w-full border border-zinc-800 bg-[#17191c] rounded-lg p-8 space-y-4 shadow-2xl">
+          <div className="flex items-center gap-3 text-amber-500">
+            <Warning size={20} weight="fill" />
+            <div className="text-[11px] tracking-[0.3em] uppercase">Session Error</div>
+          </div>
+          <h1 className="text-xl font-semibold">Missing Render Data</h1>
+          <p className="text-xs text-zinc-400 leading-relaxed">{error}</p>
         </div>
       </div>
     );
   }
 
-  if (!project || !exportSettings) {
-    return null;
-  }
+  if (!project || !exportSettings) return null;
 
-  const selectedQueueItem = queueItems.find((item) => item.id === selectedQueueId) ?? null;
   const totalFrames = exportSettings.outFrame - exportSettings.inFrame + 1;
   const timeLabel = formatTimecode(previewFrame, project.fps);
   const previewWidth = Math.max(1, Math.round(surfaceSize.width * previewScale));
   const previewHeight = Math.max(1, Math.round(surfaceSize.height * previewScale));
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0d0f11] text-zinc-100 flex flex-col">
-      <header className="h-14 shrink-0 border-b border-zinc-800 bg-[#121418] px-4 flex items-center justify-between">
-        <div>
-          <div className="text-[10px] tracking-[0.35em] uppercase text-zinc-500">Deliver</div>
-          <div className="text-base font-semibold text-zinc-100">Map Export</div>
+    <div className="h-screen w-screen overflow-hidden bg-[#0d0f11] text-zinc-100 flex flex-col font-sans select-none">
+      {/* Top Header - Resolve Style */}
+      <header className="h-12 shrink-0 border-b border-[#2a2a2a] bg-[#1a1a1a] px-4 flex items-center justify-between z-50">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+             <div className="w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
+             <span className="text-xs font-bold tracking-widest text-zinc-400 uppercase">Deliver</span>
+          </div>
+          <div className="h-4 w-px bg-zinc-800" />
+          <span className="text-xs text-zinc-500 font-medium">{project.width}x{project.height} @ {project.fps}fps</span>
         </div>
-        <div className="flex items-center gap-3">
+
+        <div className="flex items-center gap-2">
+          {lastExportPath && (
+            <button
+              onClick={handleOpenLastExport}
+              className="h-7 px-3 flex items-center gap-2 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold text-zinc-300 transition-colors border border-zinc-700"
+            >
+              <Folder size={12} weight="bold" />
+              OPEN LOCATION
+            </button>
+          )}
           <button
-            type="button"
-            onClick={handleOpenLastExport}
-            className="px-3 py-2 text-xs font-medium rounded-lg border border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white transition-colors"
-          >
-            Open Output
-          </button>
-          <button
-            type="button"
             onClick={handleRenderCurrent}
-            disabled={isRendering || !isTauriDesktop()}
-            className="px-4 py-2 text-xs font-semibold rounded-lg bg-amber-500 text-black disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={isRendering}
+            className="h-7 px-4 flex items-center gap-2 rounded bg-primary text-primary-foreground hover:brightness-110 text-[10px] font-bold transition-all disabled:opacity-40"
           >
-            Render Current
+            QUICK EXPORT
           </button>
         </div>
       </header>
 
-      <div className="h-11 shrink-0 border-b border-zinc-800 bg-[#15181d] px-3 flex items-center justify-center gap-2">
-        {RESOLUTION_PRESETS.map((preset) => {
-          const active = exportSettings.presetId === preset.id;
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => handlePresetSelect(preset.id)}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
-                  active
-                    ? "border-amber-500 bg-amber-500/10 text-amber-300"
-                    : "border-zinc-800 bg-[#101216] text-zinc-400 hover:text-white hover:border-zinc-600"
-              }`}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* Main Content Grid */}
+      <div className="flex-1 min-h-0 grid grid-cols-[300px_minmax(0,1fr)_320px] overflow-hidden">
+        
+        {/* Render Settings Panel (Left) */}
+        <aside className="min-h-0 border-r border-[#2a2a2a] bg-[#1a1a1a] overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-zinc-800/50 bg-[#1e1e1e]">
+            <span className="text-[10px] font-bold tracking-[.25em] text-zinc-500">RENDER SETTINGS</span>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            {/* File Section */}
+            <section className="space-y-3">
+              <label className="block">
+                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block mb-2">Filename</span>
+                <input
+                  value={exportSettings.fileName}
+                  onChange={(e) => updateSettings({ fileName: e.target.value })}
+                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50 transition-colors"
+                />
+              </label>
 
-      <div className="flex-1 min-h-0 grid grid-cols-[280px_minmax(0,1fr)_300px] overflow-hidden">
-        <aside className="min-h-0 border-r border-zinc-800 bg-[#111317] overflow-hidden">
-          <div className="h-full p-3 space-y-3">
-            <section className="space-y-2">
-              <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Render Settings</div>
-              <div className="space-y-2 rounded-2xl border border-zinc-800 bg-[#171a1f] p-3">
-                <label className="block space-y-2">
-                  <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">File Name</span>
+              <div className="space-y-2">
+                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Location</span>
+                <button
+                  type="button"
+                  onClick={handlePickDirectory}
+                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-left text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all flex items-center justify-between"
+                >
+                  <span className="truncate mr-2 font-mono text-[10px]">
+                    {exportSettings.directory || "Select Path..."}
+                  </span>
+                  <Folder size={12} weight="bold" className="shrink-0" />
+                </button>
+              </div>
+            </section>
+
+            <div className="h-px bg-zinc-800/50" />
+
+            {/* Video Section */}
+            <section className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-2">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Width</span>
                   <input
-                    value={exportSettings.fileName}
-                    onChange={(event) => updateSettings({ fileName: event.target.value })}
-                    className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
+                    type="number"
+                    value={exportSettings.width}
+                    onChange={(e) => updateSettings({ width: Number(e.target.value) || project.width })}
+                    className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50"
                   />
                 </label>
+                <label className="space-y-2">
+                  <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Height</span>
+                  <input
+                    type="number"
+                    value={exportSettings.height}
+                    onChange={(e) => updateSettings({ height: Number(e.target.value) || project.height })}
+                    className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50"
+                  />
+                </label>
+              </div>
 
-                <div className="space-y-2">
-                  <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Location</span>
-                  <button
-                    type="button"
-                    onClick={handlePickDirectory}
-                    className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-left text-sm text-zinc-300 hover:border-zinc-500 transition-colors"
-                  >
-                    {exportSettings.directory || "Choose export folder"}
-                  </button>
+              <label className="block">
+                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block mb-2">Video Encoder</span>
+                <select
+                  value={exportSettings.encoder}
+                  onChange={(e) => updateSettings({ encoder: e.target.value as EncoderId })}
+                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-1.5 text-xs text-zinc-200 outline-none focus:border-primary/50"
+                >
+                  {ENCODERS.map((enc) => (
+                    <option key={enc.id} value={enc.id}>{enc.label}</option>
+                  ))}
+                </select>
+              </label>
+            </section>
+
+            <div className="h-px bg-zinc-800/50" />
+
+            {/* Range Section */}
+            <section className="space-y-3">
+              <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Render Range</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded p-2 flex flex-col gap-1">
+                  <span className="text-[8px] font-bold text-zinc-500 uppercase">In Frame</span>
+                  <input
+                    type="number"
+                    value={exportSettings.inFrame}
+                    onChange={(e) => updateSettings({ inFrame: Number(e.target.value) || 0 })}
+                    className="bg-transparent border-none text-xs text-zinc-200 outline-none"
+                  />
                 </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Width</span>
-                    <input
-                      type="number"
-                      min={320}
-                      max={7680}
-                      value={exportSettings.width}
-                      onChange={(event) => updateSettings({ width: Number(event.target.value) || project.width })}
-                      className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Height</span>
-                    <input
-                      type="number"
-                      min={180}
-                      max={4320}
-                      value={exportSettings.height}
-                      onChange={(event) => updateSettings({ height: Number(event.target.value) || project.height })}
-                      className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
-                    />
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">In</span>
-                    <input
-                      type="number"
-                      min={project.startFrame}
-                      max={project.endFrame}
-                      value={exportSettings.inFrame}
-                      onChange={(event) => updateSettings({ inFrame: Number(event.target.value) || project.startFrame })}
-                      className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
-                    />
-                  </label>
-                  <label className="space-y-2">
-                    <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Out</span>
-                    <input
-                      type="number"
-                      min={exportSettings.inFrame}
-                      max={project.endFrame}
-                      value={exportSettings.outFrame}
-                      onChange={(event) => updateSettings({ outFrame: Number(event.target.value) || project.endFrame })}
-                      className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
-                    />
-                  </label>
-                </div>
-
-                <div className="space-y-2">
-                  <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Encoder</span>
-                  <select
-                    value={exportSettings.encoder}
-                    onChange={(event) => updateSettings({ encoder: event.target.value as EncoderId })}
-                    className="w-full rounded-lg border border-zinc-700 bg-[#0f1115] px-3 py-2 text-sm outline-none focus:border-amber-500"
-                  >
-                    {ENCODERS.map((encoder) => (
-                      <option key={encoder.id} value={encoder.id}>
-                        {encoder.label}
-                      </option>
-                    ))}
-                  </select>
+                <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded p-2 flex flex-col gap-1">
+                  <span className="text-[8px] font-bold text-zinc-500 uppercase">Out Frame</span>
+                  <input
+                    type="number"
+                    value={exportSettings.outFrame}
+                    onChange={(e) => updateSettings({ outFrame: Number(e.target.value) || 0 })}
+                    className="bg-transparent border-none text-xs text-zinc-200 outline-none"
+                  />
                 </div>
               </div>
             </section>
 
-            <section className="space-y-2">
-              <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Output Summary</div>
-              <div className="rounded-2xl border border-zinc-800 bg-[#171a1f] p-3 space-y-2 text-sm">
-                <div className="flex justify-between text-zinc-400">
-                  <span>Codec</span>
-                  <span className="text-zinc-100">{ENCODERS.find((item) => item.id === exportSettings.encoder)?.label}</span>
-                </div>
-                <div className="flex justify-between text-zinc-400">
-                  <span>Format</span>
-                  <span className="text-zinc-100">MP4</span>
-                </div>
-                <div className="flex justify-between text-zinc-400">
-                  <span>Frame Rate</span>
-                  <span className="text-zinc-100">{project.fps} fps</span>
-                </div>
-                <div className="flex justify-between text-zinc-400">
-                  <span>Range</span>
-                  <span className="text-zinc-100">{totalFrames} frames</span>
-                </div>
-                <div className="rounded-xl bg-[#0f1115] border border-zinc-800 px-3 py-2 text-[11px] text-zinc-400 break-all">
-                  {exportSettings.directory
-                    ? buildOutputPath(exportSettings.directory, exportSettings.fileName)
-                    : "Output path will be resolved when you queue or render."}
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Actions</div>
-              <div className="rounded-2xl border border-zinc-800 bg-[#171a1f] p-3 space-y-2">
-                <button
-                  type="button"
-                  onClick={handleAddToQueue}
-                  disabled={isRendering}
-                  className="w-full rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-zinc-500 disabled:opacity-40"
-                >
-                  Add To Queue
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRenderSelected}
-                  disabled={isRendering || !selectedQueueItem}
-                  className="w-full rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-black disabled:opacity-40"
-                >
-                  Render Selected
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runQueuedJobs()}
-                  disabled={isRendering || queueItems.length === 0}
-                  className="w-full rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-zinc-500 disabled:opacity-40"
-                >
-                  Render Queue
-                </button>
-              </div>
-            </section>
+            <button
+               onClick={handleAddToQueue}
+               disabled={isRendering}
+               className="w-full h-9 bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold text-zinc-200 rounded transition-all border border-zinc-700/50 mt-4 disabled:opacity-40"
+            >
+              ADD TO RENDER QUEUE
+            </button>
           </div>
         </aside>
 
-        <main className="min-w-0 bg-[#0e1013] flex flex-col overflow-hidden">
-          <div className="h-12 shrink-0 border-b border-zinc-800 bg-[#13161b] px-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void handlePreviewPlaybackToggle()}
-                disabled={isRendering || isPreloadingPreview}
-                className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-100 flex items-center justify-center disabled:opacity-40"
-              >
-                {isPreloadingPreview ? "Load" : isPreviewPlaying ? "Pause" : "Play"}
-              </button>
-              <div>
-                <div className="text-sm font-medium">{timeLabel}</div>
-                <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  Frame {previewFrame}
+        {/* Center Viewer Area */}
+        <main className="min-w-0 bg-[#0e0e0e] flex flex-col overflow-hidden relative">
+          {/* Header Sub-bar */}
+          <div className="h-10 border-b border-[#2a2a2a] bg-[#141414] px-4 flex items-center justify-between shrink-0">
+             <div className="flex items-center gap-6">
+                <div className="flex items-center gap-1.5">
+                   <Monitor size={14} className="text-zinc-500" />
+                   <span className="text-[10px] font-bold text-zinc-400 font-mono">{surfaceSize.width}x{surfaceSize.height}</span>
                 </div>
-              </div>
-            </div>
+                <div className="flex items-center gap-1.5">
+                   <Clock size={14} className="text-zinc-500" />
+                   <span className="text-[10px] font-bold text-zinc-400 font-mono tracking-wider">{timeLabel}</span>
+                </div>
+             </div>
 
-            <div className="text-right">
-              <div className="text-sm font-medium text-zinc-200">
-                {surfaceSize.width} x {surfaceSize.height}
-              </div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                Viewer {previewWidth} x {previewHeight}
-              </div>
-            </div>
+             <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1.5">
+                   <FrameCorners size={14} className="text-zinc-500" />
+                   <span className="text-[10px] font-bold text-zinc-500 tracking-wider">PREVIEW: {previewWidth}x{previewHeight}</span>
+                </div>
+             </div>
           </div>
 
-          <div className="flex-1 min-h-0 p-3">
+          <div className="flex-1 flex flex-col min-h-0 p-8">
             <div
               ref={previewShellRef}
-              className="w-full h-full rounded-[24px] border border-zinc-800 bg-[#15181d] shadow-[0_35px_100px_rgba(0,0,0,0.35)] flex items-center justify-center overflow-hidden relative"
+              className="flex-1 rounded-sm border border-[#2a2a2a] bg-[#0c0c0c] shadow-[0_40px_100px_rgba(0,0,0,0.6)] flex items-center justify-center overflow-hidden relative group"
             >
               <div
-                className="relative border border-zinc-900 bg-black shadow-2xl shadow-black/50"
+                className="relative bg-black shadow-2xl"
                 style={{
                   width: surfaceSize.width,
                   height: surfaceSize.height,
                   transform: `scale(${previewScale})`,
-                  transformOrigin: "center center",
                 }}
               >
                 <div ref={mapContainerRef} className="w-full h-full" />
               </div>
 
-              <div className="absolute top-3 left-3 rounded-2xl border border-zinc-800/80 bg-black/65 px-3 py-2 backdrop-blur max-w-[70%]">
-                <div className="text-[10px] uppercase tracking-[0.28em] text-zinc-500">{renderStatus.title}</div>
-                <div className="mt-1 text-xs text-zinc-200 break-all">{renderStatus.detail}</div>
+              {/* Status HUD (Top Left) */}
+              <div className="absolute top-4 left-4 flex flex-col gap-2">
+                <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-zinc-800 flex items-center gap-3">
+                   <div className={`w-1.5 h-1.5 rounded-full ${isRendering ? 'bg-red-500 animate-pulse' : 'bg-green-500'} `} />
+                   <span className="text-[9px] font-bold tracking-[.2em] text-zinc-300 uppercase">{renderStatus.title}</span>
+                </div>
+                {renderStatus.detail && (
+                  <div className="px-3 py-1 text-[8px] bg-black/40 text-zinc-500 font-mono truncate max-w-[400px]">
+                    {renderStatus.detail}
+                  </div>
+                )}
               </div>
 
-              <div className="absolute bottom-3 left-3 right-3 rounded-2xl border border-zinc-800/80 bg-black/65 px-3 py-2 backdrop-blur">
-                <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                  <span>{renderStatus.phase === "idle" ? "Preview" : "Render Status"}</span>
-                  <span>{renderStatus.totalFrames > 0 ? `${renderStatus.renderedFrames}/${renderStatus.totalFrames}` : "Ready"}</span>
+              {/* Transport Controls Overlay */}
+              <div className="absolute inset-x-0 bottom-0 p-6 bg-gradient-to-t from-black/90 to-transparent flex flex-col gap-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                <div className="flex items-center justify-center gap-6">
+                   <button 
+                     onClick={() => void handlePreviewPlaybackToggle()}
+                     className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
+                   >
+                     {isPreviewPlaying ? <Pause size={20} weight="fill" /> : <Play size={20} weight="fill" />}
+                   </button>
                 </div>
-                <div className="mt-3 h-2 rounded-full bg-zinc-800 overflow-hidden">
-                  <div
-                    className="h-full bg-amber-500 transition-[width] duration-200"
-                    style={{ width: `${renderStatus.progress}%` }}
-                  />
+                
+                <div className="space-y-2">
+                   <div className="flex items-center justify-between text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
+                      <span>{renderStatus.phase === "idle" ? "Timeline Position" : "Rendering Progress"}</span>
+                      <span>{Math.round(renderStatus.progress)}%</span>
+                   </div>
+                   <div className="h-1.5 bg-zinc-800/50 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(59,130,246,0.5)]" 
+                        style={{ width: `${renderStatus.progress}%` }} 
+                      />
+                   </div>
+                   <input
+                     type="range"
+                     min={exportSettings.inFrame}
+                     max={exportSettings.outFrame}
+                     value={previewFrame}
+                     onChange={(e) => {
+                       setIsPreviewPlaying(false);
+                       setPreviewFrame(Number(e.target.value));
+                     }}
+                     className="w-full h-1 accent-primary bg-zinc-700/50 rounded-full appearance-none cursor-pointer"
+                   />
                 </div>
-                <input
-                  type="range"
-                  min={exportSettings.inFrame}
-                  max={exportSettings.outFrame}
-                  step={1}
-                  value={previewFrame}
-                  onChange={(event) => {
-                    setIsPreviewPlaying(false);
-                    setPreviewFrame(Number(event.target.value));
-                  }}
-                  className="mt-4 w-full accent-amber-500"
-                />
               </div>
             </div>
           </div>
         </main>
 
-        <aside className="min-h-0 border-l border-zinc-800 bg-[#111317] overflow-hidden">
-          <div className="h-full p-3 space-y-3 flex flex-col">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Render Queue</div>
-                <div className="text-base font-semibold">Jobs</div>
+        {/* Render Queue (Right Sidebar) */}
+        <aside className="min-h-0 border-l border-[#2a2a2a] bg-[#1a1a1a] overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-zinc-800/50 bg-[#1e1e1e] flex items-center justify-between">
+            <span className="text-[10px] font-bold tracking-[.25em] text-zinc-500">RENDER QUEUE</span>
+            <span className="text-[10px] font-mono text-zinc-600">{queueItems.length} JOBS</span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            {queueItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 opacity-20 gap-3">
+                 <Queue size={32} />
+                 <span className="text-[9px] font-bold tracking-widest uppercase">Queue is Empty</span>
               </div>
-              <div className="text-sm text-zinc-500">{queueItems.length}</div>
-            </div>
-
-            <div className="flex-1 min-h-0 space-y-2 overflow-hidden">
-              {queueItems.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-zinc-800 bg-[#171a1f] p-4 text-sm text-zinc-500">
-                  Queue an export from the left panel to render it here.
-                </div>
-              )}
-
-              {queueItems.map((item) => {
-                const selected = item.id === selectedQueueId;
-                const active = item.id === activeQueueId;
+            ) : (
+              queueItems.map((item) => {
+                const isSelected = item.id === selectedQueueId;
+                const isActive = item.id === activeQueueId;
+                const isDone = item.status === "done";
+                const isError = item.status === "error";
 
                 return (
                   <div
                     key={item.id}
-                    className={`rounded-2xl border p-3 transition-colors ${
-                      selected
-                        ? "border-amber-500/70 bg-amber-500/10"
-                        : "border-zinc-800 bg-[#171a1f] hover:border-zinc-700"
+                    onClick={() => setSelectedQueueId(item.id)}
+                    className={`group relative rounded border p-3 transition-all cursor-pointer ${
+                      isSelected ? 'bg-primary/5 border-primary/50' : 'bg-[#0f0f0f] border-[#2a2a2a] hover:border-zinc-700'
                     }`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => handleQueueSelect(item)}
-                      className="w-full text-left space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-medium text-zinc-100">{item.fileName}.mp4</div>
-                          <div className="text-xs text-zinc-500">{item.createdAt}</div>
-                        </div>
-                        <div
-                          className={`px-2 py-1 rounded-full text-[10px] uppercase tracking-[0.18em] ${
-                            item.status === "done"
-                              ? "bg-emerald-500/10 text-emerald-300"
-                              : item.status === "error"
-                                ? "bg-red-500/10 text-red-300"
-                                : active
-                                  ? "bg-amber-500/10 text-amber-300"
-                                  : "bg-zinc-800 text-zinc-400"
-                          }`}
-                        >
-                          {active ? "Rendering" : item.status}
-                        </div>
-                      </div>
-                      <div className="text-xs text-zinc-400">{summarizeQueueItem(item)}</div>
-                      <div className="text-xs text-zinc-500">
-                        Frames {item.inFrame} - {item.outFrame}
-                      </div>
-                      <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                        <div className="h-full bg-amber-500" style={{ width: `${item.progress}%` }} />
-                      </div>
-                      <div className="text-xs text-zinc-400">{item.statusText}</div>
-                      {item.error && <div className="text-xs text-red-300">{item.error}</div>}
-                      {item.resultPath && <div className="text-xs text-zinc-500 break-all">{item.resultPath}</div>}
-                    </button>
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                       <div className="min-w-0">
+                          <div className={`text-[10px] font-bold truncate mb-0.5 ${isDone ? 'text-zinc-500' : 'text-zinc-200'}`}>
+                            {item.fileName}.mp4
+                          </div>
+                          <div className="text-[8px] text-zinc-600 font-mono">{item.createdAt}</div>
+                       </div>
+                       
+                       <div className="shrink-0">
+                          {isDone ? (
+                            <CheckCircle size={14} className="text-emerald-500" weight="fill" />
+                          ) : isError ? (
+                            <Warning size={14} className="text-red-500" weight="fill" />
+                          ) : isActive ? (
+                            <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse" />
+                          ) : (
+                            <div className="w-1.5 h-1.5 bg-zinc-700 rounded-full" />
+                          )}
+                       </div>
+                    </div>
 
-                      <div className="mt-2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void runQueuedJobs([item.id])}
-                        disabled={isRendering}
-                        className="flex-1 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-200 hover:border-zinc-500 disabled:opacity-40"
-                      >
-                        Render
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveQueueItem(item.id)}
-                        disabled={active}
-                        className="rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-400 hover:text-white hover:border-zinc-500 disabled:opacity-40"
-                      >
-                        Remove
-                      </button>
+                    <div className="flex items-center justify-between text-[8px] font-bold text-zinc-500 uppercase tracking-tighter mb-2">
+                       <span>{item.width}x{item.height} • {item.encoder}</span>
+                       <span className={isActive ? 'text-primary' : ''}>{item.statusText}</span>
+                    </div>
+
+                    <div className="h-1 bg-zinc-800 rounded-full overflow-hidden mb-2">
+                       <div 
+                         className={`h-full transition-all duration-300 ${isError ? 'bg-red-500' : isDone ? 'bg-zinc-600' : 'bg-primary'}`}
+                         style={{ width: `${item.progress}%` }} 
+                       />
+                    </div>
+
+                    <div className="flex gap-2">
+                       <button
+                         onClick={(e) => { e.stopPropagation(); void runQueuedJobs([item.id]); }}
+                         disabled={isRendering || isDone}
+                         className="flex-1 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-[8px] font-bold text-zinc-300 disabled:opacity-20"
+                       >
+                         {isError ? "RETRY" : "RENDER"}
+                       </button>
+                       <button
+                         onClick={(e) => { e.stopPropagation(); handleRemoveQueueItem(item.id); }}
+                         disabled={isActive}
+                         className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-500 hover:text-red-400 disabled:opacity-20 transition-colors"
+                       >
+                         <Trash size={12} />
+                       </button>
                     </div>
                   </div>
                 );
-              })}
-            </div>
-
-            {!isTauriDesktop() && (
-              <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-                This window is configured for the Tauri desktop build. Native FFmpeg export will fail in a plain browser tab.
-              </div>
-            )}
-
-            {error && project && (
-              <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-                {error}
-              </div>
+              })
             )}
           </div>
+
+          {queueItems.length > 0 && (
+            <div className="p-3 border-t border-[#2a2a2a]">
+               <button
+                 onClick={() => void runQueuedJobs()}
+                 disabled={isRendering}
+                 className="w-full h-8 bg-zinc-100 hover:bg-white text-black text-[10px] font-bold rounded flex items-center justify-center gap-2 transition-all disabled:opacity-40"
+               >
+                 <Play size={14} weight="fill" />
+                 RENDER ALL
+               </button>
+            </div>
+          )}
         </aside>
       </div>
+
+      {/* Footer Info-bar */}
+      <footer className="h-8 shrink-0 bg-[#121212] border-t border-[#2a2a2a] px-4 flex items-center justify-between overflow-hidden">
+        <div className="flex items-center gap-4 text-[9px] font-bold text-zinc-600 uppercase tracking-widest">
+           <div className="flex items-center gap-1.5">
+              <Info size={12} />
+              <span>GPU Rendering Active</span>
+           </div>
+           {isRendering && <span className="text-primary">Encoding Video {Math.round(renderStatus.progress)}%</span>}
+        </div>
+        <div className="text-[9px] font-mono text-zinc-600 truncate max-w-[50%]">
+           {lastExportPath ? `Last saved to: ${lastExportPath}` : "Waiting for render job..."}
+        </div>
+      </footer>
     </div>
   );
 };
