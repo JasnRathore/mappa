@@ -10,7 +10,7 @@ import {
   MagnifyingGlass,
   File as FileIcon
 } from "@phosphor-icons/react";
-import { useProjectStore, getRecentProjects, type RecentProject } from "../store/useProjectStore";
+import { useProjectStore, syncLibraryWithDisk, type RecentProject } from "../store/useProjectStore";
 
 interface Props {
   onComplete: (settings: ProjectSettings) => void;
@@ -27,8 +27,9 @@ const PRESETS = [
 const FPS_OPTIONS = [24, 30, 60];
 
 const ProjectManager: React.FC<Props> = () => {
-  const { newProject, loadProject } = useProjectStore();
+  const { newProject, loadProject, deleteProject } = useProjectStore();
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
   
@@ -40,7 +41,13 @@ const ProjectManager: React.FC<Props> = () => {
   const [durationSecs, setDurationSecs] = useState(30);
 
   useEffect(() => {
-    setRecentProjects(getRecentProjects());
+    const init = async () => {
+      setIsRefreshing(true);
+      const synced = await syncLibraryWithDisk();
+      setRecentProjects(synced);
+      setIsRefreshing(false);
+    };
+    init();
   }, []);
 
   const handleCreateNew = async (e: React.FormEvent) => {
@@ -66,6 +73,18 @@ const ProjectManager: React.FC<Props> = () => {
 
   const handleOpenRecent = async (path: string) => {
     await loadProject(path);
+  };
+
+  const handleDeleteProject = async (e: React.MouseEvent, path: string, name: string) => {
+    e.stopPropagation();
+    if (confirm(`Are you sure you want to permanently delete "${name}" from your library? This will delete the file from your computer.`)) {
+      const success = await deleteProject(path);
+      if (success) {
+        setRecentProjects(prev => prev.filter(p => p.path !== path));
+      } else {
+        alert("Failed to delete project file. It might be in use or you may not have permissions.");
+      }
+    }
   };
 
   return (
@@ -126,6 +145,7 @@ const ProjectManager: React.FC<Props> = () => {
           </div>
           
           <div className="flex gap-3">
+             {isRefreshing && <span className="text-[10px] text-zinc-600 animate-pulse mt-3 mr-2">SCANNING LIBRARY...</span>}
              <button 
                onClick={handleOpenLocal}
                className="flex items-center gap-2 px-4 py-2 rounded-md bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium transition-all"
@@ -167,7 +187,10 @@ const ProjectManager: React.FC<Props> = () => {
                    <h3 className="text-sm font-semibold text-zinc-100 truncate">{p.name}</h3>
                    <div className="flex items-center justify-between text-[10px] text-zinc-500">
                       <span>{new Date(p.lastModified).toLocaleDateString()}</span>
-                      <button className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400">
+                      <button 
+                        onClick={(e) => handleDeleteProject(e, p.path, p.name)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400"
+                      >
                          <Trash size={14} />
                       </button>
                    </div>

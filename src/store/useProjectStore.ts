@@ -39,6 +39,7 @@ interface ProjectState {
   saveProject: (asNewPath?: boolean) => Promise<boolean>;
   loadProject: (path?: string) => Promise<boolean>;
   newProject: (settings: ProjectSettings, name: string) => Promise<{ success: boolean; error?: string }>;
+  deleteProject: (path: string) => Promise<boolean>;
 
 
   // Timeline Utilities
@@ -358,6 +359,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       const sanitized = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
       const potentialPath = await join(projectsDir, `${sanitized}.mappa`);
+      
+      console.log("[Mappa] New project target path:", potentialPath);
 
       if (await exists(potentialPath)) {
         return { success: false, error: "A project with this name already exists in your library." };
@@ -372,11 +375,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentFrame: 0,
         activeElementId: null
       });
+      
+      console.log("[Mappa] Project initialized at:", potentialPath);
+
+      // Instantly create the file on disk
+      await get().saveProject();
 
       return { success: true };
-    } catch (err) {
+    } catch (err: any) {
       console.error("New project error:", err);
-      return { success: false, error: "System error: Failed to initialize project storage. Check permissions." };
+      return { success: false, error: `System error: ${err.message || 'Failed to initialize project'}. Check permissions.` };
     }
   },
 
@@ -419,7 +427,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         markers
       }, null, 2);
 
+      console.log("[Mappa] Writing data to:", targetPath);
       await writeTextFile(targetPath, data);
+      console.log("[Mappa] Write successful.");
       
       const fileName = targetPath.split(/[\\/]/).pop() || projectName;
       const strippedName = fileName.replace(/\.mappa$|\.json$/, "");
@@ -436,8 +446,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
 
       return true;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save project:", err);
+      alert(`Save Error: ${err.message || String(err)}`);
       return false;
     }
   },
@@ -484,10 +495,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       console.error("Failed to load project:", err);
     }
     return false;
+  },
+
+  deleteProject: async (path) => {
+    const { remove } = await import('@tauri-apps/plugin-fs');
+    try {
+      await remove(path);
+      // Update Registry
+      const recent = getRecentProjects();
+      const updated = recent.filter(p => p.path !== path);
+      localStorage.setItem("mappa_recent_projects", JSON.stringify(updated));
+      return true;
+    } catch (err) {
+      console.error("Failed to delete project:", err);
+      return false;
+    }
   }
 }));
 
-// --- Recent Projects Registry Helper ---
+// --- Library Scanning & Registry Helpers ---
 export interface RecentProject {
   name: string;
   path: string;
@@ -495,6 +521,63 @@ export interface RecentProject {
 }
 
 const REGISTRY_KEY = "mappa_recent_projects";
+
+// Scans the disk and merges with localStorage to return the definitive list
+export const syncLibraryWithDisk = async (): Promise<RecentProject[]> => {
+  try {
+    const { appLocalDataDir, join } = await import('@tauri-apps/api/path');
+    const { readDir, stat, exists, mkdir } = await import('@tauri-apps/plugin-fs');
+    
+    const localDir = await appLocalDataDir();
+    const projectsDir = await join(localDir, 'projects');
+
+    if (!await exists(projectsDir)) {
+      await mkdir(projectsDir, { recursive: true });
+      return [];
+    }
+
+    const entries = await readDir(projectsDir);
+    const diskProjects: RecentProject[] = [];
+
+    for (const entry of entries) {
+      if (entry.isFile && (entry.name.endsWith('.mappa') || entry.name.endsWith('.json'))) {
+        const fullPath = await join(projectsDir, entry.name);
+        const fileStat = await stat(fullPath);
+        
+        diskProjects.push({
+          name: entry.name.replace(/\.mappa$|\.json$/, ""),
+          path: fullPath,
+          lastModified: fileStat.mtime ? new Date(fileStat.mtime).getTime() : Date.now()
+        });
+      }
+    }
+
+    // Merge with histori (localStorage might have projects on other drives/paths we want to keep)
+    const history = getRecentProjects();
+    const combined = [...diskProjects];
+
+    // Add history items if they aren't already included from the disk scan
+    for (const hItem of history) {
+      if (!combined.some(p => p.path === hItem.path)) {
+        // Optional: Check if history item still exists on disk before adding
+        if (await exists(hItem.path)) {
+          combined.push(hItem);
+        }
+      }
+    }
+
+    // Sort by most recently modified
+    const sorted = combined.sort((a, b) => b.lastModified - a.lastModified);
+    
+    // Persist the synced list back to registry
+    localStorage.setItem(REGISTRY_KEY, JSON.stringify(sorted.slice(0, 50)));
+
+    return sorted;
+  } catch (err) {
+    console.error("Library sync failed:", err);
+    return getRecentProjects();
+  }
+};
 
 export const getRecentProjects = (): RecentProject[] => {
   const data = localStorage.getItem(REGISTRY_KEY);

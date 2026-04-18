@@ -19,6 +19,11 @@
     "dialog:default",
     "shell:default",
     "fs:default",
+    "fs:allow-write-text-file",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    "fs:allow-applocaldata-write-recursive",
+    "fs:allow-applocaldata-read-recursive",
     {
       "identifier": "fs:scope",
       "allow": [
