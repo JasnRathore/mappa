@@ -48,7 +48,7 @@ export const TimecodeRuler: React.FC = () => {
     const handleMouseMove = (mv: MouseEvent) => {
       const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
       const x = mv.clientX - rect.left;
-      const rawFrame = Math.max(0, Math.min(Math.floor(x / timelineZoom), durationFrames));
+      const rawFrame = Math.max(0, type === "end" ? Math.floor(x / timelineZoom) : Math.min(Math.floor(x / timelineZoom), durationFrames));
       const frame = snapFrame(rawFrame);
 
       if (type === "start") {

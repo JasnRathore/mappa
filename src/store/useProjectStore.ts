@@ -310,9 +310,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   })),
 
-  updateProjectSettings: (updates) => set((state) => ({
-    project: state.project ? { ...state.project, ...updates } : null
-  })),
+  updateProjectSettings: (updates) => set((state) => {
+    if (!state.project) return state;
+    const newProject = { ...state.project, ...updates };
+    
+    // Auto-grow durationFrames if the endFrame is moved beyond the current duration
+    if (newProject.endFrame > newProject.durationFrames) {
+      newProject.durationFrames = newProject.endFrame;
+    }
+    
+    return { project: newProject };
+  }),
 
   addMarker: (frame) => set((state) => {
     const newMarker: Marker = {
