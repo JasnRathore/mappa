@@ -418,19 +418,19 @@ export const Workspace: React.FC = () => {
       </header>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-row overflow-hidden bg-[#0a0a0a]">
+      <div className="flex-1 flex flex-row overflow-hidden bg-background">
         {/* Left - Media Pool / Effects / Index */}
-        <aside className="w-80 border-r border-[#2a2a2a] bg-[#1a1a1a] shrink-0 flex flex-col overflow-hidden">
+        <aside className="w-80 border-r border-border bg-card shrink-0 flex flex-col overflow-hidden">
           <Tabs defaultValue="media" className="flex-1 flex flex-col">
-            <div className="px-2 pt-2 border-b border-[#2a2a2a] bg-[#1e1e1e]">
+            <div className="px-2 pt-2 border-b border-border bg-card/50">
               <TabsList className="bg-transparent h-8 w-full justify-start gap-1 p-0">
-                <TabsTrigger value="media" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
+                <TabsTrigger value="media" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
                   <Folder size={12} weight="bold" /> MEDIA POOL
                 </TabsTrigger>
-                <TabsTrigger value="effects" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
+                <TabsTrigger value="effects" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
                   <MagicWand size={12} weight="bold" /> EFFECTS
                 </TabsTrigger>
-                <TabsTrigger value="index" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 ml-auto">
+                <TabsTrigger value="index" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 ml-auto">
                   <List size={12} weight="bold" /> INDEX
                 </TabsTrigger>
               </TabsList>
@@ -453,19 +453,19 @@ export const Workspace: React.FC = () => {
         </aside>
 
         {/* Center - Viewer */}
-        <main className="flex-1 bg-black overflow-hidden relative flex flex-col border-r border-[#2a2a2a]">
+        <main className="flex-1 bg-black overflow-hidden relative flex flex-col border-r border-border">
           <ViewerPanel />
         </main>
 
         {/* Right - Inspector / Metadata */}
-        <aside className="w-80 bg-[#1a1a1a] shrink-0 flex flex-col overflow-hidden">
+        <aside className="w-80 bg-card shrink-0 flex flex-col overflow-hidden">
           <Tabs defaultValue="inspector" className="flex-1 flex flex-col min-h-0">
-            <div className="px-2 pt-2 border-b border-[#2a2a2a] bg-[#1e1e1e]">
+            <div className="px-2 pt-2 border-b border-border bg-card/50">
               <TabsList className="bg-transparent h-8 w-full justify-start gap-1 p-0">
-                <TabsTrigger value="inspector" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
+                <TabsTrigger value="inspector" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
                   <SlidersHorizontal size={12} weight="bold" /> INSPECTOR
                 </TabsTrigger>
-                <TabsTrigger value="metadata" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
+                <TabsTrigger value="metadata" className="h-7 text-[10px] gap-1.5 data-[state=active]:bg-accent data-[state=active]:text-primary rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3">
                   <Info size={12} weight="bold" /> METADATA
                 </TabsTrigger>
               </TabsList>
@@ -491,7 +491,7 @@ export const Workspace: React.FC = () => {
       </div>
 
       {/* Bottom - Timeline */}
-      <section className="h-80 border-t border-[#2a2a2a] bg-[#141414] shrink-0 flex flex-col overflow-hidden">
+      <section className="h-80 border-t border-border bg-background shrink-0 flex flex-col overflow-hidden">
         <Timeline />
       </section>
     </div>
@@ -509,7 +509,7 @@ export const Workspace: React.FC = () => {
                   className={`border rounded flex items-center shadow-2xl ${
                     isSnapped 
                       ? "bg-orange-800 border-orange-400 h-10 px-3 ring-2 ring-white/20" 
-                      : "bg-[#1a1a1a] border-primary p-2 w-64"
+                      : "bg-card border-primary p-2 w-64"
                   }`}
                   style={{
                     width: isSnapped && dragPreview ? dragPreview.durationFrames * timelineZoom : undefined
@@ -518,7 +518,7 @@ export const Workspace: React.FC = () => {
                   <div className={`truncate ${isSnapped ? "text-[10px] font-bold text-orange-100 uppercase tracking-tight" : "text-xs font-medium text-primary"}`}>
                     {data.payload.name}
                   </div>
-                  {!isSnapped && <div className="text-[10px] text-zinc-500 truncate ml-2">{data.payload.display_name}</div>}
+                  {!isSnapped && <div className="text-[10px] text-muted-foreground truncate ml-2">{data.payload.display_name}</div>}
                 </div>
               );
             }
@@ -529,7 +529,7 @@ export const Workspace: React.FC = () => {
                   className={`border rounded flex items-center shadow-2xl ${
                     isSnapped 
                       ? "bg-purple-800 border-purple-400 h-10 px-3 ring-2 ring-white/20" 
-                      : "bg-[#1a1a1a] border-primary p-2 w-48"
+                      : "bg-card border-primary p-2 w-48"
                   }`}
                   style={{
                     width: isSnapped && dragPreview ? dragPreview.durationFrames * timelineZoom : undefined

@@ -28,8 +28,15 @@ import {
   Info, 
   CheckCircle,
   Queue,
-  Warning
+  Warning,
+  X
 } from "@phosphor-icons/react";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { ScrollArea } from "./ui/scroll-area";
+import { Separator } from "./ui/separator";
+import { cn } from "../lib/utils";
 
 type EncoderId = "libx264" | "h264_nvenc" | "h264_qsv" | "h264_amf";
 type QueueStatus = "queued" | "rendering" | "done" | "error";
@@ -990,16 +997,16 @@ const MapRenderer: React.FC = () => {
   const previewHeight = Math.max(1, Math.round(surfaceSize.height * previewScale));
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0d0f11] text-zinc-100 flex flex-col font-sans select-none">
-      {/* Top Header - Resolve Style */}
-      <header className="h-12 shrink-0 border-b border-[#2a2a2a] bg-[#1a1a1a] px-4 flex items-center justify-between z-50">
-        <div className="flex items-center gap-4">
+    <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
+      {/* Header */}
+      <header className="h-12 border-b bg-card flex items-center justify-between px-4 shrink-0">
+        <div className="flex items-center space-x-4">
           <div className="flex items-center gap-2">
-             <div className="w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
-             <span className="text-xs font-bold tracking-widest text-zinc-400 uppercase">Deliver</span>
+             <div className="w-5 h-5 bg-primary rounded flex items-center justify-center font-bold text-primary-foreground text-[10px]">M</div>
+             <span className="font-semibold tracking-wide text-sm">Deliver</span>
           </div>
-          <div className="h-4 w-px bg-zinc-800" />
-          <span className="text-xs text-zinc-500 font-medium">{project.width}x{project.height} @ {project.fps}fps</span>
+          <div className="h-4 w-px bg-border" />
+          <span className="text-xs text-muted-foreground font-medium">{project.width}x{project.height} @ {project.fps}fps</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1026,133 +1033,136 @@ const MapRenderer: React.FC = () => {
       <div className="flex-1 min-h-0 grid grid-cols-[300px_minmax(0,1fr)_320px] overflow-hidden">
         
         {/* Render Settings Panel (Left) */}
-        <aside className="min-h-0 border-r border-[#2a2a2a] bg-[#1a1a1a] overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-zinc-800/50 bg-[#1e1e1e]">
-            <span className="text-[10px] font-bold tracking-[.25em] text-zinc-500">RENDER SETTINGS</span>
+        <aside className="min-h-0 border-r border-border bg-card overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-border bg-card/50">
+            <span className="text-[10px] font-bold tracking-[.25em] text-muted-foreground uppercase">Render Settings</span>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
-            {/* File Section */}
-            <section className="space-y-3">
-              <label className="block">
-                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block mb-2">Filename</span>
-                <input
-                  value={exportSettings.fileName}
-                  onChange={(e) => updateSettings({ fileName: e.target.value })}
-                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50 transition-colors"
-                />
-              </label>
-
-              <div className="space-y-2">
-                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Location</span>
-                <button
-                  type="button"
-                  onClick={handlePickDirectory}
-                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-left text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-all flex items-center justify-between"
-                >
-                  <span className="truncate mr-2 font-mono text-[10px]">
-                    {exportSettings.directory || "Select Path..."}
-                  </span>
-                  <Folder size={12} weight="bold" className="shrink-0" />
-                </button>
-              </div>
-            </section>
-
-            <div className="h-px bg-zinc-800/50" />
-
-            {/* Video Section */}
-            <section className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <label className="space-y-2">
-                  <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Width</span>
-                  <input
-                    type="number"
-                    value={exportSettings.width}
-                    onChange={(e) => updateSettings({ width: Number(e.target.value) || project.width })}
-                    className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50"
-                  />
-                </label>
-                <label className="space-y-2">
-                  <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Height</span>
-                  <input
-                    type="number"
-                    value={exportSettings.height}
-                    onChange={(e) => updateSettings({ height: Number(e.target.value) || project.height })}
-                    className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-2 text-xs text-zinc-200 outline-none focus:border-primary/50"
-                  />
-                </label>
-              </div>
-
-              <label className="block">
-                <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block mb-2">Video Encoder</span>
-                <select
-                  value={exportSettings.encoder}
-                  onChange={(e) => updateSettings({ encoder: e.target.value as EncoderId })}
-                  className="w-full h-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded px-1.5 text-xs text-zinc-200 outline-none focus:border-primary/50"
-                >
-                  {ENCODERS.map((enc) => (
-                    <option key={enc.id} value={enc.id}>{enc.label}</option>
-                  ))}
-                </select>
-              </label>
-            </section>
-
-            <div className="h-px bg-zinc-800/50" />
-
-            {/* Range Section */}
-            <section className="space-y-3">
-              <span className="text-[9px] font-bold text-zinc-600 uppercase tracking-widest block">Render Range</span>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded p-2 flex flex-col gap-1">
-                  <span className="text-[8px] font-bold text-zinc-500 uppercase">In Frame</span>
-                  <input
-                    type="number"
-                    value={exportSettings.inFrame}
-                    onChange={(e) => updateSettings({ inFrame: Number(e.target.value) || 0 })}
-                    className="bg-transparent border-none text-xs text-zinc-200 outline-none"
+          <ScrollArea className="flex-1">
+            <div className="p-4 space-y-6">
+              {/* File Section */}
+              <section className="space-y-3">
+                <div className="space-y-2">
+                  <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block">Filename</Label>
+                  <Input
+                    value={exportSettings.fileName}
+                    onChange={(e) => updateSettings({ fileName: e.target.value })}
+                    className="h-8 text-xs"
                   />
                 </div>
-                <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded p-2 flex flex-col gap-1">
-                  <span className="text-[8px] font-bold text-zinc-500 uppercase">Out Frame</span>
-                  <input
-                    type="number"
-                    value={exportSettings.outFrame}
-                    onChange={(e) => updateSettings({ outFrame: Number(e.target.value) || 0 })}
-                    className="bg-transparent border-none text-xs text-zinc-200 outline-none"
-                  />
-                </div>
-              </div>
-            </section>
 
-            <button
-               onClick={handleAddToQueue}
-               disabled={isRendering}
-               className="w-full h-9 bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold text-zinc-200 rounded transition-all border border-zinc-700/50 mt-4 disabled:opacity-40"
-            >
-              ADD TO RENDER QUEUE
-            </button>
-          </div>
+                <div className="space-y-2">
+                  <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block">Location</Label>
+                  <Button
+                    variant="outline"
+                    onClick={handlePickDirectory}
+                    className="w-full h-8 px-2 justify-between font-normal text-xs text-muted-foreground hover:text-foreground border-border bg-muted/30"
+                  >
+                    <span className="truncate mr-2 font-mono text-[10px]">
+                      {exportSettings.directory || "Select Path..."}
+                    </span>
+                    <Folder size={12} weight="bold" className="shrink-0" />
+                  </Button>
+                </div>
+              </section>
+
+              <Separator className="bg-border/50" />
+
+              {/* Video Section */}
+              <section className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block">Width</Label>
+                    <Input
+                      type="number"
+                      value={exportSettings.width}
+                      onChange={(e) => updateSettings({ width: Number(e.target.value) || project.width })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block">Height</Label>
+                    <Input
+                      type="number"
+                      value={exportSettings.height}
+                      onChange={(e) => updateSettings({ height: Number(e.target.value) || project.height })}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block mb-2">Video Encoder</Label>
+                  <select
+                    value={exportSettings.encoder}
+                    onChange={(e) => updateSettings({ encoder: e.target.value as EncoderId })}
+                    className="w-full h-8 bg-muted border border-border rounded px-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    {ENCODERS.map((enc) => (
+                      <option key={enc.id} value={enc.id}>{enc.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </section>
+
+              <Separator className="bg-border/50" />
+
+              {/* Range Section */}
+              <section className="space-y-3">
+                <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest block">Render Range</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/50 border border-border rounded p-2 flex flex-col gap-1">
+                    <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-tighter">In Frame</span>
+                    <input
+                      type="number"
+                      value={exportSettings.inFrame}
+                      onChange={(e) => updateSettings({ inFrame: Number(e.target.value) || 0 })}
+                      className="bg-transparent border-none text-xs text-foreground outline-none font-mono"
+                    />
+                  </div>
+                  <div className="bg-muted/50 border border-border rounded p-2 flex flex-col gap-1">
+                    <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-tighter">Out Frame</span>
+                    <input
+                      type="number"
+                      value={exportSettings.outFrame}
+                      onChange={(e) => updateSettings({ outFrame: Number(e.target.value) || 0 })}
+                      className="bg-transparent border-none text-xs text-foreground outline-none font-mono"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <Button
+                 onClick={handleAddToQueue}
+                 disabled={isRendering}
+                 variant="outline"
+                 className="w-full h-9 text-[10px] font-bold uppercase tracking-widest mt-4"
+              >
+                ADD TO RENDER QUEUE
+              </Button>
+            </div>
+          </ScrollArea>
         </aside>
 
         {/* Center Viewer Area */}
-        <main className="min-w-0 bg-[#0e0e0e] flex flex-col overflow-hidden relative">
+        <main className="min-w-0 bg-background flex flex-col overflow-hidden relative">
           {/* Header Sub-bar */}
-          <div className="h-10 border-b border-[#2a2a2a] bg-[#141414] px-4 flex items-center justify-between shrink-0">
+          <div className="h-10 border-b border-border bg-card/30 px-4 flex items-center justify-between shrink-0 font-mono">
              <div className="flex items-center gap-6">
                 <div className="flex items-center gap-1.5">
-                   <Monitor size={14} className="text-zinc-500" />
-                   <span className="text-[10px] font-bold text-zinc-400 font-mono">{surfaceSize.width}x{surfaceSize.height}</span>
+                   <Monitor size={14} className="text-muted-foreground" />
+                   <span className="text-[10px] font-bold text-muted-foreground">{surfaceSize.width}x{surfaceSize.height}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                   <Clock size={14} className="text-zinc-500" />
-                   <span className="text-[10px] font-bold text-zinc-400 font-mono tracking-wider">{timeLabel}</span>
+                   <Clock size={14} className="text-muted-foreground" />
+                   <span className="text-[10px] font-bold text-muted-foreground tracking-wider">{timeLabel}</span>
                 </div>
              </div>
 
              <div className="flex items-center gap-4">
                 <div className="flex items-center gap-1.5">
-                   <FrameCorners size={14} className="text-zinc-500" />
-                   <span className="text-[10px] font-bold text-zinc-500 tracking-wider">PREVIEW: {previewWidth}x{previewHeight}</span>
+                   <FrameCorners size={14} className="text-muted-foreground" />
+                   <span className="text-[10px] font-bold text-muted-foreground tracking-wider uppercase">Preview: {previewWidth}x{previewHeight}</span>
                 </div>
              </div>
           </div>
@@ -1160,7 +1170,7 @@ const MapRenderer: React.FC = () => {
           <div className="flex-1 flex flex-col min-h-0 p-8">
             <div
               ref={previewShellRef}
-              className="flex-1 rounded-sm border border-[#2a2a2a] bg-[#0c0c0c] shadow-[0_40px_100px_rgba(0,0,0,0.6)] flex items-center justify-center overflow-hidden relative group"
+              className="flex-1 rounded-sm border border-border bg-black shadow-[0_40px_100px_rgba(0,0,0,0.8)] flex items-center justify-center overflow-hidden relative group"
             >
               <div
                 className="relative bg-black shadow-2xl"
@@ -1175,12 +1185,12 @@ const MapRenderer: React.FC = () => {
 
               {/* Status HUD (Top Left) */}
               <div className="absolute top-4 left-4 flex flex-col gap-2">
-                <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-zinc-800 flex items-center gap-3">
-                   <div className={`w-1.5 h-1.5 rounded-full ${isRendering ? 'bg-red-500 animate-pulse' : 'bg-green-500'} `} />
-                   <span className="text-[9px] font-bold tracking-[.2em] text-zinc-300 uppercase">{renderStatus.title}</span>
+                <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-border flex items-center gap-3">
+                   <div className={`w-1.5 h-1.5 rounded-full ${isRendering ? 'bg-destructive animate-pulse' : 'bg-emerald-500'} `} />
+                   <span className="text-[9px] font-bold tracking-[.2em] text-foreground uppercase">{renderStatus.title}</span>
                 </div>
                 {renderStatus.detail && (
-                  <div className="px-3 py-1 text-[8px] bg-black/40 text-zinc-500 font-mono truncate max-w-[400px]">
+                  <div className="px-3 py-1 text-[8px] bg-black/40 text-muted-foreground font-mono truncate max-w-[400px]">
                     {renderStatus.detail}
                   </div>
                 )}
@@ -1198,16 +1208,17 @@ const MapRenderer: React.FC = () => {
                 </div>
                 
                 <div className="space-y-2">
-                   <div className="flex items-center justify-between text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
-                      <span>{renderStatus.phase === "idle" ? "Timeline Position" : "Rendering Progress"}</span>
-                      <span>{Math.round(renderStatus.progress)}%</span>
-                   </div>
-                   <div className="h-1.5 bg-zinc-800/50 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(59,130,246,0.5)]" 
-                        style={{ width: `${renderStatus.progress}%` }} 
-                      />
-                   </div>
+                    <div className="flex items-center justify-between text-[8px] font-bold text-muted-foreground uppercase tracking-widest">
+                       <span>{renderStatus.phase === "idle" ? "Timeline Position" : "Rendering Progress"}</span>
+                       <span>{Math.round(renderStatus.progress)}%</span>
+                    </div>
+                    <div className="h-1.5 bg-muted/30 rounded-full overflow-hidden">
+                       <div 
+                         className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(var(--primary),0.5)]" 
+                         style={{ width: `${renderStatus.progress}%` }} 
+                       />
+                    </div>
+                 </div>
                    <input
                      type="range"
                      min={exportSettings.inFrame}
@@ -1222,117 +1233,124 @@ const MapRenderer: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
         </main>
 
         {/* Render Queue (Right Sidebar) */}
-        <aside className="min-h-0 border-l border-[#2a2a2a] bg-[#1a1a1a] overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-zinc-800/50 bg-[#1e1e1e] flex items-center justify-between">
-            <span className="text-[10px] font-bold tracking-[.25em] text-zinc-500">RENDER QUEUE</span>
-            <span className="text-[10px] font-mono text-zinc-600">{queueItems.length} JOBS</span>
+        <aside className="min-h-0 border-l border-border bg-card overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-border bg-card/50 flex items-center justify-between">
+            <span className="text-[10px] font-bold tracking-[.25em] text-muted-foreground uppercase">Render Queue</span>
+            <span className="text-[10px] font-mono text-muted-foreground/50">{queueItems.length} JOBS</span>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {queueItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 opacity-20 gap-3">
-                 <Queue size={32} />
-                 <span className="text-[9px] font-bold tracking-widest uppercase">Queue is Empty</span>
-              </div>
-            ) : (
-              queueItems.map((item) => {
-                const isSelected = item.id === selectedQueueId;
-                const isActive = item.id === activeQueueId;
-                const isDone = item.status === "done";
-                const isError = item.status === "error";
+          <ScrollArea className="flex-1">
+            <div className="p-3 space-y-3">
+              {queueItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-48 opacity-20 gap-3">
+                   <Queue size={32} />
+                   <span className="text-[9px] font-bold tracking-widest uppercase text-muted-foreground">Queue is Empty</span>
+                </div>
+              ) : (
+                queueItems.map((item) => {
+                  const isSelected = item.id === selectedQueueId;
+                  const isActive = item.id === activeQueueId;
+                  const isDone = item.status === "done";
+                  const isError = item.status === "error";
 
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => setSelectedQueueId(item.id)}
-                    className={`group relative rounded border p-3 transition-all cursor-pointer ${
-                      isSelected ? 'bg-primary/5 border-primary/50' : 'bg-[#0f0f0f] border-[#2a2a2a] hover:border-zinc-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                       <div className="min-w-0">
-                          <div className={`text-[10px] font-bold truncate mb-0.5 ${isDone ? 'text-zinc-500' : 'text-zinc-200'}`}>
-                            {item.fileName}.mp4
-                          </div>
-                          <div className="text-[8px] text-zinc-600 font-mono">{item.createdAt}</div>
-                       </div>
-                       
-                       <div className="shrink-0">
-                          {isDone ? (
-                            <CheckCircle size={14} className="text-emerald-500" weight="fill" />
-                          ) : isError ? (
-                            <Warning size={14} className="text-red-500" weight="fill" />
-                          ) : isActive ? (
-                            <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse" />
-                          ) : (
-                            <div className="w-1.5 h-1.5 bg-zinc-700 rounded-full" />
-                          )}
-                       </div>
-                    </div>
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedQueueId(item.id)}
+                      className={cn(
+                        "group relative rounded border p-3 transition-all cursor-pointer",
+                        isSelected ? 'bg-primary/5 border-primary/50' : 'bg-muted/30 border-border hover:border-muted-foreground/30'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                         <div className="min-w-0">
+                            <div className={cn("text-[10px] font-bold truncate mb-0.5", isDone ? 'text-muted-foreground' : 'text-foreground')}>
+                              {item.fileName}.mp4
+                            </div>
+                            <div className="text-[8px] text-muted-foreground/60 font-mono">{item.createdAt}</div>
+                         </div>
+                         
+                         <div className="shrink-0">
+                            {isDone ? (
+                              <CheckCircle size={14} className="text-emerald-500" weight="fill" />
+                            ) : isError ? (
+                              <Warning size={14} className="text-destructive" weight="fill" />
+                            ) : isActive ? (
+                              <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse" />
+                            ) : (
+                              <div className="w-1.5 h-1.5 bg-muted rounded-full" />
+                            )}
+                         </div>
+                      </div>
 
-                    <div className="flex items-center justify-between text-[8px] font-bold text-zinc-500 uppercase tracking-tighter mb-2">
-                       <span>{item.width}x{item.height} • {item.encoder}</span>
-                       <span className={isActive ? 'text-primary' : ''}>{item.statusText}</span>
-                    </div>
+                      <div className="flex items-center justify-between text-[8px] font-bold text-muted-foreground uppercase tracking-tighter mb-2">
+                         <span>{item.width}x{item.height} • {item.encoder}</span>
+                         <span className={isActive ? 'text-primary' : ''}>{item.statusText}</span>
+                      </div>
 
-                    <div className="h-1 bg-zinc-800 rounded-full overflow-hidden mb-2">
-                       <div 
-                         className={`h-full transition-all duration-300 ${isError ? 'bg-red-500' : isDone ? 'bg-zinc-600' : 'bg-primary'}`}
-                         style={{ width: `${item.progress}%` }} 
-                       />
-                    </div>
+                      <div className="h-1 bg-muted rounded-full overflow-hidden mb-2">
+                         <div 
+                           className={cn("h-full transition-all duration-300", isError ? 'bg-destructive' : isDone ? 'bg-muted-foreground/30' : 'bg-primary')}
+                           style={{ width: `${item.progress}%` }} 
+                         />
+                      </div>
 
-                    <div className="flex gap-2">
-                       <button
-                         onClick={(e) => { e.stopPropagation(); void runQueuedJobs([item.id]); }}
-                         disabled={isRendering || isDone}
-                         className="flex-1 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-[8px] font-bold text-zinc-300 disabled:opacity-20"
-                       >
-                         {isError ? "RETRY" : "RENDER"}
-                       </button>
-                       <button
-                         onClick={(e) => { e.stopPropagation(); handleRemoveQueueItem(item.id); }}
-                         disabled={isActive}
-                         className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-500 hover:text-red-400 disabled:opacity-20 transition-colors"
-                       >
-                         <Trash size={12} />
-                       </button>
+                      <div className="flex gap-2">
+                         <Button
+                           variant="secondary"
+                           size="sm"
+                           onClick={(e) => { e.stopPropagation(); void runQueuedJobs([item.id]); }}
+                           disabled={isRendering || isDone}
+                           className="flex-1 h-6 text-[8px] font-bold uppercase rounded"
+                         >
+                           {isError ? "Retry" : "Render"}
+                         </Button>
+                         <Button
+                           variant="ghost"
+                           size="icon"
+                           onClick={(e) => { e.stopPropagation(); handleRemoveQueueItem(item.id); }}
+                           disabled={isActive}
+                           className="w-6 h-6 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                         >
+                           <Trash size={12} />
+                         </Button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
+          </ScrollArea>
 
           {queueItems.length > 0 && (
-            <div className="p-3 border-t border-[#2a2a2a]">
-               <button
+            <div className="p-3 border-t border-border bg-card/50">
+               <Button
+                 variant="outline"
                  onClick={() => void runQueuedJobs()}
                  disabled={isRendering}
-                 className="w-full h-8 bg-zinc-100 hover:bg-white text-black text-[10px] font-bold rounded flex items-center justify-center gap-2 transition-all disabled:opacity-40"
+                 className="w-full text-[10px] font-bold tracking-widest uppercase gap-2"
                >
                  <Play size={14} weight="fill" />
-                 RENDER ALL
-               </button>
+                 Render All
+               </Button>
             </div>
           )}
         </aside>
       </div>
 
       {/* Footer Info-bar */}
-      <footer className="h-8 shrink-0 bg-[#121212] border-t border-[#2a2a2a] px-4 flex items-center justify-between overflow-hidden">
-        <div className="flex items-center gap-4 text-[9px] font-bold text-zinc-600 uppercase tracking-widest">
+      <footer className="h-8 shrink-0 bg-card border-t border-border px-4 flex items-center justify-between overflow-hidden">
+        <div className="flex items-center gap-4 text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
            <div className="flex items-center gap-1.5">
               <Info size={12} />
               <span>GPU Rendering Active</span>
            </div>
            {isRendering && <span className="text-primary">Encoding Video {Math.round(renderStatus.progress)}%</span>}
         </div>
-        <div className="text-[9px] font-mono text-zinc-600 truncate max-w-[50%]">
+        <div className="text-[9px] font-mono text-muted-foreground/50 truncate max-w-[50%]">
            {lastExportPath ? `Last saved to: ${lastExportPath}` : "Waiting for render job..."}
         </div>
       </footer>

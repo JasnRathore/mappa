@@ -44,17 +44,17 @@ export const SearchPanel: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#1a1a1a]">
-      <div className="p-3 border-b border-[#2a2a2a] flex-shrink-0">
+    <div className="flex flex-col h-full bg-card">
+      <div className="p-3 border-b border-border flex-shrink-0">
         <form onSubmit={handleSearch} className="flex gap-2">
           <Input 
             autoFocus 
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search location..." 
-            className="flex-1 h-8 text-xs bg-[#111] border-[#333] text-zinc-100 placeholder:text-zinc-600"
+            className="flex-1 h-8 text-xs bg-muted/50 border-border"
           />
-          <Button type="submit" size="sm" variant="secondary" className="h-8 bg-zinc-800 hover:bg-zinc-700" disabled={isSearching}>
+          <Button type="submit" size="sm" variant="secondary" className="h-8 shadow-sm" disabled={isSearching}>
             <MagnifyingGlass weight="bold" />
           </Button>
         </form>
