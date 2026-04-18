@@ -18,15 +18,9 @@ export const DraggableEffectItem: React.FC<Props> = ({ id, name, type }) => {
     },
   });
 
-  const style = transform ? {
-    transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-    zIndex: 9999,
-  } : undefined;
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...listeners}
       {...attributes}
       className={`p-2 border rounded bg-background hover:bg-zinc-800 cursor-grab active:cursor-grabbing group transition-all shadow-sm flex items-center gap-2 ${

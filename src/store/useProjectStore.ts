@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import type { ProjectSettings, TimelineElement, Marker } from '../types';
+import type { ProjectSettings, TimelineElement, Marker, TimelineElementType } from '../types';
+
+export interface DragPreview {
+  startFrame: number;
+  trackIndex: number;
+  durationFrames: number;
+  name: string;
+  type: TimelineElementType;
+}
 
 interface ProjectState {
   // Project Data
@@ -17,6 +25,7 @@ interface ProjectState {
   snappingEnabled: boolean;
   activeTool: "pointer" | "blade";
   trackStates: Record<number, { locked: boolean; hidden: boolean }>;
+  dragPreview: DragPreview | null;
 
 
   // Actions
@@ -30,6 +39,7 @@ interface ProjectState {
   setSnappingEnabled: (enabled: boolean) => void;
   setActiveTool: (tool: "pointer" | "blade") => void;
   toggleTrackState: (trackIndex: number, property: "locked" | "hidden") => void;
+  setDragPreview: (preview: DragPreview | null) => void;
   updateProjectSettings: (updates: Partial<ProjectSettings>) => void;
   addMarker: (frame: number) => void;
   deleteMarker: (id: string) => void;
@@ -76,6 +86,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     2: { locked: false, hidden: false },
     3: { locked: false, hidden: false },
   },
+  dragPreview: null,
 
   setProject: (project, name, path) => set((state) => ({ 
     project, 
@@ -309,6 +320,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }
   })),
+
+  setDragPreview: (dragPreview) => set({ dragPreview }),
 
   updateProjectSettings: (updates) => set((state) => {
     if (!state.project) return state;

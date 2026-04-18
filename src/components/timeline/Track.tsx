@@ -11,7 +11,7 @@ interface Props {
 const TRACK_HEADER_WIDTH = 96;
 
 export const Track: React.FC<Props> = ({ trackIndex }) => {
-  const { timelineElements, project, timelineZoom, trackStates, toggleTrackState } = useProjectStore();
+  const { timelineElements, project, timelineZoom, trackStates, toggleTrackState, dragPreview } = useProjectStore();
   const elements = timelineElements.filter((e) => e.trackIndex === trackIndex);
   const trackState = trackStates[trackIndex] || { locked: false, hidden: false };
 
@@ -89,6 +89,21 @@ export const Track: React.FC<Props> = ({ trackIndex }) => {
           {elements.map((el) => (
             <TimelineClip key={el.id} element={el} />
           ))}
+
+          {/* Snap Preview Ghost */}
+          {dragPreview && dragPreview.trackIndex === trackIndex && (
+            <div
+              className={`absolute top-0 bottom-0 border-2 border-dashed border-white/40 rounded-sm flex items-center px-2 text-[9px] font-bold uppercase tracking-tight pointer-events-none z-50 bg-white/5 ${
+                dragPreview.type === 'location' ? 'border-orange-500/40 text-orange-200/60' : 'border-purple-500/40 text-purple-200/60'
+              }`}
+              style={{
+                left: dragPreview.startFrame * timelineZoom,
+                width: dragPreview.durationFrames * timelineZoom,
+              }}
+            >
+              {dragPreview.name}
+            </div>
+          )}
         </div>
       </div>
     </div>

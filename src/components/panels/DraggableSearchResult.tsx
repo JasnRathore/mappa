@@ -15,15 +15,9 @@ export const DraggableSearchResult: React.FC<Props> = ({ payload }) => {
     },
   });
 
-  const style = transform ? {
-    transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-    zIndex: 9999,
-  } : undefined;
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...listeners}
       {...attributes}
       className={`p-2 border rounded bg-background hover:bg-zinc-800 cursor-grab active:cursor-grabbing group transition-colors shadow-sm ${isDragging ? "opacity-30 border-primary" : "border-zinc-800"

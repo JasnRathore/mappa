@@ -37,8 +37,7 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
     left: `${left}px`,
     width: `${width}px`,
     height: '100%',
-    transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.6 : 1,
+    opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 10 : 1,
     touchAction: 'none'
   };

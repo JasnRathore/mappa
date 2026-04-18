@@ -1,12 +1,13 @@
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState } from "react";
 import {
   DndContext,
   PointerSensor,
   useSensor,
   useSensors,
+  DragOverlay,
 } from "@dnd-kit/core";
-import type { DragEndEvent } from "@dnd-kit/core";
-import type { TimelineElement } from "../../types";
+import type { DragEndEvent, DragStartEvent, DragOverEvent, DragMoveEvent, Active } from "@dnd-kit/core";
+import type { TimelineElement, TimelineElementType } from "../../types";
 import { SearchPanel } from "../panels/SearchPanel";
 import { ViewerPanel } from "../panels/ViewerPanel";
 import { InspectorPanel } from "../panels/InspectorPanel";
@@ -48,14 +49,101 @@ export const Workspace: React.FC = () => {
     setProject
   } = useProjectStore();
   
+  const [activeDragItem, setActiveDragItem] = useState<Active | null>(null);
+  const [initialDragX, setInitialDragX] = useState(0);
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
     })
   );
 
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragItem(event.active);
+    const activator = event.activatorEvent as MouseEvent | TouchEvent;
+    const clientX = "clientX" in activator ? activator.clientX : activator.touches[0].clientX;
+    setInitialDragX(clientX);
+  }, []);
+
+  const updateDragPreview = useCallback((event: DragOverEvent | DragMoveEvent) => {
+    const { active, over, delta } = event;
+    if (!over || !project) {
+      useProjectStore.getState().setDragPreview(null);
+      return;
+    }
+
+    const overIdStr = over.id.toString();
+    const trackMatch = overIdStr.match(/track-(\d+)/);
+    if (!trackMatch) {
+      useProjectStore.getState().setDragPreview(null);
+      return;
+    }
+    const trackIndex = parseInt(trackMatch[1], 10);
+
+    const activeData = active.data.current;
+    if (!activeData) return;
+
+    let startFrame = 0;
+    let durationFrames = 0;
+    let name = "";
+    let type: TimelineElementType = "location";
+
+    const tContainer = document.getElementById("timeline-scroll-container");
+    if (!tContainer) return;
+    const rect = tContainer.getBoundingClientRect();
+    const scrollLeft = tContainer.scrollLeft;
+
+    if (activeData.type === "new-location" || activeData.type === "new-effect") {
+      const currentX = initialDragX + delta.x;
+      const relativeX = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+      let projectedFrame = Math.floor(relativeX / timelineZoom);
+      if (projectedFrame < 0) projectedFrame = 0;
+      startFrame = useProjectStore.getState().snapFrame(projectedFrame);
+
+      if (activeData.type === "new-location") {
+        durationFrames = project.fps * 5;
+        name = activeData.payload.name || "Location";
+        type = "location";
+      } else {
+        durationFrames = project.fps * 10;
+        name = activeData.name || "Effect";
+        type = "effect_detail";
+      }
+    } else if (activeData.id && (activeData.type === "location" || activeData.type === "effect_detail")) {
+      durationFrames = activeData.durationFrames;
+      name = activeData.name;
+      type = activeData.type;
+      
+      const frameDelta = Math.round(delta.x / timelineZoom);
+      let newStart = activeData.startFrame + frameDelta;
+      if (newStart < 0) newStart = 0;
+      startFrame = useProjectStore.getState().snapFrame(newStart);
+    } else {
+      useProjectStore.getState().setDragPreview(null);
+      return;
+    }
+
+    useProjectStore.getState().setDragPreview({
+      startFrame,
+      trackIndex,
+      durationFrames,
+      name,
+      type
+    });
+  }, [project, timelineZoom, initialDragX]);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    updateDragPreview(event);
+  }, [updateDragPreview]);
+
+  const handleDragMove = useCallback((event: DragMoveEvent) => {
+    updateDragPreview(event);
+  }, [updateDragPreview]);
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      setActiveDragItem(null);
+      useProjectStore.getState().setDragPreview(null);
       const { active, over, delta } = event;
       if (!over) return;
       
@@ -74,12 +162,12 @@ export const Workspace: React.FC = () => {
         
         const rect = tContainer.getBoundingClientRect();
         const scrollLeft = tContainer.scrollLeft;
-        const activator = event.activatorEvent as MouseEvent | TouchEvent;
-        const clientX = "clientX" in activator ? activator.clientX : activator.touches[0].clientX;
         
-        const x = clientX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+        const currentX = initialDragX + delta.x;
+        const x = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
         let startFrame = Math.floor(x / timelineZoom);
         if (startFrame < 0) startFrame = 0;
+        startFrame = useProjectStore.getState().snapFrame(startFrame);
 
         const newEl: TimelineElement = {
           id: `clip-${Date.now()}`,
@@ -91,6 +179,7 @@ export const Workspace: React.FC = () => {
           locationPayload: payload,
         };
 
+        const activator = event.activatorEvent;
         const isInsert = activator instanceof MouseEvent ? activator.altKey : false;
         useProjectStore.getState().addTimelineElement(newEl, isInsert);
         return;
@@ -101,11 +190,12 @@ export const Workspace: React.FC = () => {
         if (!tContainer || !project) return;
         const rect = tContainer.getBoundingClientRect();
         const scrollLeft = tContainer.scrollLeft;
-        const activator = event.activatorEvent as MouseEvent | TouchEvent;
-        const clientX = "clientX" in activator ? activator.clientX : activator.touches[0].clientX;
-        const x = clientX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+        
+        const currentX = initialDragX + delta.x;
+        const x = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
         let startFrame = Math.floor(x / timelineZoom);
         if (startFrame < 0) startFrame = 0;
+        startFrame = useProjectStore.getState().snapFrame(startFrame);
 
         const newEl: TimelineElement = {
           id: `clip-${Date.now()}`,
@@ -119,6 +209,7 @@ export const Workspace: React.FC = () => {
           }
         };
 
+        const activator = event.activatorEvent;
         const isInsert = activator instanceof MouseEvent ? activator.altKey : false;
         useProjectStore.getState().addTimelineElement(newEl, isInsert);
         return;
@@ -130,6 +221,8 @@ export const Workspace: React.FC = () => {
         const frameDelta = Math.round(delta.x / timelineZoom);
         let newStart = el.startFrame + frameDelta;
         if (newStart < 0) newStart = 0;
+        newStart = useProjectStore.getState().snapFrame(newStart);
+
         if (project && newStart + el.durationFrames > project.durationFrames) {
           newStart = project.durationFrames - el.durationFrames;
         }
@@ -140,7 +233,7 @@ export const Workspace: React.FC = () => {
         useProjectStore.getState().moveTimelineElement(el.id, newStart, newTrackIndex, isInsert);
       }
     },
-    [timelineElements, timelineZoom, project]
+    [timelineElements, timelineZoom, project, initialDragX]
   );
 
   useEffect(() => {
@@ -226,7 +319,17 @@ export const Workspace: React.FC = () => {
   if (!project) return null;
 
   return (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext 
+      sensors={sensors} 
+      onDragStart={handleDragStart} 
+      onDragOver={handleDragOver}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd} 
+      onDragCancel={() => {
+        setActiveDragItem(null);
+        useProjectStore.getState().setDragPreview(null);
+      }}
+    >
     <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
       {/* Header */}
       <header className="h-12 border-b bg-card flex items-center justify-between px-4 shrink-0">
@@ -334,6 +437,48 @@ export const Workspace: React.FC = () => {
         <Timeline />
       </section>
     </div>
+    
+    <DragOverlay dropAnimation={null}>
+      {activeDragItem ? (
+        <div className="opacity-80 scale-105 transition-transform">
+          {(() => {
+            const data = activeDragItem.data.current;
+            if (data?.type === "new-location") {
+              return (
+                <div className="p-2 border rounded bg-[#1a1a1a] border-primary shadow-xl w-64">
+                  <div className="font-medium text-xs truncate text-primary">{data.payload.name}</div>
+                  <div className="text-[10px] text-zinc-500 truncate">{data.payload.display_name}</div>
+                </div>
+              );
+            }
+            if (data?.type === "new-effect") {
+              return (
+                <div className="p-2 border rounded bg-[#1a1a1a] border-primary shadow-xl flex items-center gap-2 w-48">
+                  <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center text-primary">
+                    <MagicWand size={14} weight="bold" />
+                  </div>
+                  <div className="font-medium text-[11px] text-zinc-200">{data.name}</div>
+                </div>
+              );
+            }
+            // For existing timeline clips
+            if (data?.id && (data.type === "location" || data.type === "effect_detail")) {
+               return (
+                <div 
+                  className={`h-8 px-2 border border-white rounded-sm flex items-center text-[10px] font-medium shadow-2xl ${
+                    data.type === 'location' ? 'bg-orange-800/90 text-orange-100' : 'bg-purple-800/90 text-purple-100'
+                  }`} 
+                  style={{ width: activeDragItem.rect.current.initial?.width ?? 100 }}
+                >
+                  {data.name}
+                </div>
+               );
+            }
+            return null;
+          })()}
+        </div>
+      ) : null}
+    </DragOverlay>
     </DndContext>
   );
 };
