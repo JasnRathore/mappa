@@ -10,7 +10,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Mappar",
         options,
-        Box::new(|_cc| Ok(Box::new(MyApp::default()))),
+        Box::new(|cc| Ok(Box::new(MyApp::new(cc)))),
     )
 }
 
@@ -18,28 +18,27 @@ struct MyApp {
     map: MapEngine,
 }
 
-impl Default for MyApp {
-    fn default() -> Self {
+impl MyApp {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self {
-            map: MapEngine::new(),
+            map: MapEngine::new(cc),
         }
     }
 }
 
-// ⚠️ YOUR VERSION EXPECTS `ui`, NOT `update`
 impl eframe::App for MyApp {
+    // The 'ui' method provides 'ui: &mut egui::Ui'
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        app_ui(&ctx, ui, &mut self.map);
+        app_ui(ui, &mut self.map);
     }
 }
 
-fn app_ui(ctx: &egui::Context, root_ui: &mut egui::Ui, map: &mut MapEngine) {
+fn app_ui(ui: &mut egui::Ui, map: &mut MapEngine) {
+    // Fix: Pass the 'ui' reference into show_inside, not 'ctx'
     Panel::bottom("timeline")
         .resizable(true)
-        .default_size(600.0)
-        .min_size(200.0)
-        .show(ctx, |ui| {
+        .default_size(200.0)
+        .show_inside(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.heading("TIMELINE");
             });
@@ -48,7 +47,7 @@ fn app_ui(ctx: &egui::Context, root_ui: &mut egui::Ui, map: &mut MapEngine) {
     Panel::left("media_pool")
         .resizable(true)
         .default_size(180.0)
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.heading("MEDIA");
             });
@@ -57,22 +56,22 @@ fn app_ui(ctx: &egui::Context, root_ui: &mut egui::Ui, map: &mut MapEngine) {
     Panel::right("inspector")
         .resizable(true)
         .default_size(220.0)
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.centered_and_justified(|ui| {
                 ui.heading("INSPECTOR");
             });
         });
 
-    CentralPanel::default().show(ctx, |ui| {
+    CentralPanel::default().show_inside(ui, |ui| {
         ui.vertical(|ui| {
-            ui.label(format!("Zoom: {}", map.zoom));
+            ui.label(format!("Zoom: {:.1}", map.zoom()));
             ui.separator();
 
             egui::Frame::new()
                 .fill(egui::Color32::from_gray(15))
-                .inner_margin(egui::Margin::same(4))
+                .inner_margin(egui::Margin::same(0))
                 .show(ui, |ui| {
-                    map.ui(ui, ctx);
+                    map.ui(ui);
                 });
         });
     });
