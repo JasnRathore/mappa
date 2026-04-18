@@ -206,17 +206,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
 
       {/* Center: Project Name */}
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-medium text-muted-foreground">
-          {projectName || "Untitled Project"}
-        </span>
-        {project && (
+      {project && (
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {projectName || "Untitled Project"}
+          </span>
+
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground/70 font-mono">
             {project.width}x{project.height}
           </span>
-        )}
-      </div>
 
+        </div>
+      )}
       {/* Right: Actions & Window Controls */}
       <div className="flex items-center h-full">
 
