@@ -999,7 +999,7 @@ const MapRenderer: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
-      <TitleBar onDeliver={handleRenderCurrent} deliverLabel="Quick Export" />
+      <TitleBar hideAllMenus={true} />
 
       {/* Main Content Grid */}
       <div className="flex-1 min-h-0 grid grid-cols-[300px_minmax(0,1fr)_320px] overflow-hidden">
