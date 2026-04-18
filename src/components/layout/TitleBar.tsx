@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   X,
   Minus,
@@ -91,6 +92,23 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     await appWindow.close();
   };
 
+  const handleOpenManager = () => {
+    const managerId = `manager-${Date.now()}`;
+    const webview = new WebviewWindow(managerId, {
+      url: "?mode=manager",
+      title: "Mappa Project Manager",
+      width: 1280,
+      height: 800,
+      resizable: true,
+      decorations: false,
+    });
+
+    webview.once("tauri://error", (e) => {
+      console.error("Failed to create manager window", e);
+      alert("Failed to launch project manager window.");
+    });
+  };
+
   return (
     <div
       data-tauri-drag-region
@@ -135,10 +153,9 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 {project && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setProject(null)} className="text-xs">
+                    <DropdownMenuItem onClick={handleOpenManager} className="text-xs">
                       <CardsThreeIcon className="mr-2 h-3.5 w-3.5" />
                       Project Manager
-                      {/* <DropdownMenuShortcut>Ctrl+S</DropdownMenuShortcut> */}
                     </DropdownMenuItem>
                   </>
                 )}

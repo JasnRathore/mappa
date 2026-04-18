@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ProjectSettings } from "../types";
 import {
   Folder,
@@ -63,6 +65,28 @@ const ProjectManager: React.FC<Props> = () => {
     init();
   }, []);
 
+  const openEditor = async (path: string) => {
+    const editorId = `editor-${Date.now()}`;
+    const webview = new WebviewWindow(editorId, {
+      url: `?mode=editor&projectPath=${encodeURIComponent(path)}`,
+      title: "Mappa Editor",
+      width: 1280,
+      height: 800,
+      resizable: true,
+      decorations: false,
+    });
+
+    webview.once("tauri://created", () => {
+      console.log("[Mappa] Editor window created, closing manager.");
+      getCurrentWindow().close();
+    });
+
+    webview.once("tauri://error", (e) => {
+      console.error("Failed to create editor window", e);
+      alert("Failed to launch editor window.");
+    });
+  };
+
   const handleCreateNew = async (e: React.FormEvent) => {
     e.preventDefault();
     const durationFrames = fps * durationSecs;
@@ -75,17 +99,27 @@ const ProjectManager: React.FC<Props> = () => {
       endFrame: durationFrames - 1
     }, name);
 
-    if (!result.success) {
+    if (result.success) {
+      const path = useProjectStore.getState().filePath;
+      if (path) openEditor(path);
+    } else {
       alert(result.error);
     }
   };
 
   const handleOpenLocal = async () => {
-    await loadProject();
+    const success = await loadProject();
+    if (success) {
+      const path = useProjectStore.getState().filePath;
+      if (path) openEditor(path);
+    }
   };
 
   const handleOpenRecent = async (path: string) => {
-    await loadProject(path);
+    const success = await loadProject(path);
+    if (success) {
+      openEditor(path);
+    }
   };
 
   const handleDeleteProject = async (e: React.MouseEvent, path: string, name: string) => {
