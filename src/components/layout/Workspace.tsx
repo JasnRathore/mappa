@@ -298,6 +298,7 @@ export const Workspace: React.FC = () => {
         resizable: true,
         decorations: false,
         maximized: true,
+        visible: false,
       });
 
       webview.once("tauri://error", (e) => {

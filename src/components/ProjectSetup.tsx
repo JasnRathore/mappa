@@ -8,9 +8,9 @@ import {
   Monitor,
   Trash,
   Plus,
-  ClockClockwise,
   MagnifyingGlass,
-  File as FileIcon
+  File as FileIcon,
+  CircleNotch
 } from "@phosphor-icons/react";
 import { useProjectStore, syncLibraryWithDisk, type RecentProject } from "../store/useProjectStore";
 import { Button } from "./ui/button";
@@ -75,6 +75,7 @@ const ProjectManager: React.FC<Props> = () => {
       resizable: true,
       decorations: false,
       maximized: true,
+      visible: false,
     });
 
     webview.once("tauri://created", () => {
@@ -158,7 +159,12 @@ const ProjectManager: React.FC<Props> = () => {
             </div>
 
             <div className="flex gap-3">
-              {isRefreshing && <span className="text-[10px] text-muted-foreground animate-pulse mt-3 mr-2">SCANNING LIBRARY...</span>}
+              {isRefreshing && (
+                <div className="flex items-center gap-1.5 text-muted-foreground mr-2">
+                  <CircleNotch size={14} className="animate-spin text-primary" />
+                  <span className="text-[10px] tracking-widest uppercase font-bold">Scanning Library...</span>
+                </div>
+              )}
               <Button
                 variant="secondary"
                 onClick={handleOpenLocal}

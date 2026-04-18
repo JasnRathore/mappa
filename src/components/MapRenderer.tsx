@@ -29,7 +29,8 @@ import {
   CheckCircle,
   Queue,
   Warning,
-  X
+  X,
+  CircleNotch
 } from "@phosphor-icons/react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -968,7 +969,7 @@ const MapRenderer: React.FC = () => {
     return (
       <div className="h-full bg-[#111315] text-zinc-200 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+          <CircleNotch size={48} className="animate-spin text-primary" />
           <div className="text-[10px] tracking-[0.3em] uppercase text-zinc-500">Initializing Deliver Engine</div>
         </div>
       </div>
