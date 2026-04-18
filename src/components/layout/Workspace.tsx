@@ -28,6 +28,7 @@ import {
   Export
 } from "@phosphor-icons/react";
 import { DraggableEffectItem } from "../panels/DraggableEffectItem";
+import { TitleBar } from "./TitleBar";
 
 const TRACK_HEADER_WIDTH = 96;
 
@@ -389,33 +390,7 @@ export const Workspace: React.FC = () => {
       }}
     >
     <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
-      {/* Header */}
-      <header className="h-12 border-b bg-card flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center space-x-4">
-          <span className="font-semibold tracking-wide">Mappa Resolve</span>
-          <div className="h-4 w-px bg-border mx-2" />
-          <span className="text-muted-foreground text-xs">
-            {project.width}x{project.height} @ {project.fps}fps
-          </span>
-        </div>
-        
-        <div className="flex space-x-2">
-          <Button variant="ghost" size="sm" onClick={handleNewProject} className="text-xs h-7 px-2">
-            Project Manager
-          </Button>
-          <div className="h-4 w-px bg-border my-1.5" />
-          <Button variant="ghost" size="sm" onClick={handleOpen} className="text-xs h-7 px-2">
-            Open
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleSave} className="text-xs h-7 px-2 border-orange-500/30 text-orange-400 hover:bg-orange-500/10">
-            <Export size={12} className="mr-1.5" /> Save
-          </Button>
-          <div className="h-4 w-px bg-border my-1.5" />
-          <Button variant="secondary" size="sm" onClick={handleDeliver} className="h-7 px-4">
-            Deliver
-          </Button>
-        </div>
-      </header>
+      <TitleBar onDeliver={handleDeliver} />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-row overflow-hidden bg-background">

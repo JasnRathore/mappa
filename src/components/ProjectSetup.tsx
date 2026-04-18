@@ -23,6 +23,7 @@ import {
   DialogFooter,
 } from "./ui/dialog";
 import { cn } from "../lib/utils";
+import { TitleBar } from "./layout/TitleBar";
 
 interface Props {
   onComplete: (settings: ProjectSettings) => void;
@@ -100,9 +101,14 @@ const ProjectManager: React.FC<Props> = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-background text-foreground font-sans overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-card border-r border-border flex flex-col pt-12">
+    <div className="flex flex-col h-screen w-screen bg-background overflow-hidden">
+      <TitleBar 
+        hideDeliver={true} 
+        onNew={() => setShowNewModal(true)}
+      />
+      <div className="flex flex-1 min-h-0 text-foreground font-sans overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-64 bg-card border-r border-border flex flex-col pt-4">
         <div className="px-6 mb-8 flex items-center gap-3">
           <div className="w-8 h-8 bg-primary rounded flex items-center justify-center font-bold text-primary-foreground text-xl">
              M
@@ -346,6 +352,7 @@ const ProjectManager: React.FC<Props> = () => {
           </form>
         </DialogContent>
       </Dialog>
+      </div>
     </div>
   );
 };

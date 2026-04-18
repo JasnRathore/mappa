@@ -37,6 +37,7 @@ import { Label } from "./ui/label";
 import { ScrollArea } from "./ui/scroll-area";
 import { Separator } from "./ui/separator";
 import { cn } from "../lib/utils";
+import { TitleBar } from "./layout/TitleBar";
 
 type EncoderId = "libx264" | "h264_nvenc" | "h264_qsv" | "h264_amf";
 type QueueStatus = "queued" | "rendering" | "done" | "error";
@@ -998,36 +999,7 @@ const MapRenderer: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
-      {/* Header */}
-      <header className="h-12 border-b bg-card flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center gap-2">
-             <div className="w-5 h-5 bg-primary rounded flex items-center justify-center font-bold text-primary-foreground text-[10px]">M</div>
-             <span className="font-semibold tracking-wide text-sm">Deliver</span>
-          </div>
-          <div className="h-4 w-px bg-border" />
-          <span className="text-xs text-muted-foreground font-medium">{project.width}x{project.height} @ {project.fps}fps</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {lastExportPath && (
-            <button
-              onClick={handleOpenLastExport}
-              className="h-7 px-3 flex items-center gap-2 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold text-zinc-300 transition-colors border border-zinc-700"
-            >
-              <Folder size={12} weight="bold" />
-              OPEN LOCATION
-            </button>
-          )}
-          <button
-            onClick={handleRenderCurrent}
-            disabled={isRendering}
-            className="h-7 px-4 flex items-center gap-2 rounded bg-primary text-primary-foreground hover:brightness-110 text-[10px] font-bold transition-all disabled:opacity-40"
-          >
-            QUICK EXPORT
-          </button>
-        </div>
-      </header>
+      <TitleBar onDeliver={handleRenderCurrent} deliverLabel="Quick Export" />
 
       {/* Main Content Grid */}
       <div className="flex-1 min-h-0 grid grid-cols-[300px_minmax(0,1fr)_320px] overflow-hidden">
