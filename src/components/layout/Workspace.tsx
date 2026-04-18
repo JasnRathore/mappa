@@ -5,6 +5,8 @@ import {
   useSensor,
   useSensors,
   DragOverlay,
+  type Modifier,
+  pointerWithin,
 } from "@dnd-kit/core";
 import type { DragEndEvent, DragStartEvent, DragOverEvent, DragMoveEvent, Active } from "@dnd-kit/core";
 import type { TimelineElement, TimelineElementType } from "../../types";
@@ -46,11 +48,11 @@ export const Workspace: React.FC = () => {
     setTimelineElements, 
     timelineZoom, 
     trackStates,
-    setProject
+    setProject,
+    dragPreview,
   } = useProjectStore();
   
   const [activeDragItem, setActiveDragItem] = useState<Active | null>(null);
-  const [initialDragX, setInitialDragX] = useState(0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -60,9 +62,6 @@ export const Workspace: React.FC = () => {
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveDragItem(event.active);
-    const activator = event.activatorEvent as MouseEvent | TouchEvent;
-    const clientX = "clientX" in activator ? activator.clientX : activator.touches[0].clientX;
-    setInitialDragX(clientX);
   }, []);
 
   const updateDragPreview = useCallback((event: DragOverEvent | DragMoveEvent) => {
@@ -93,9 +92,11 @@ export const Workspace: React.FC = () => {
     const rect = tContainer.getBoundingClientRect();
     const scrollLeft = tContainer.scrollLeft;
 
+    const currentRect = active.rect.current.translated;
+    if (!currentRect) return;
+
     if (activeData.type === "new-location" || activeData.type === "new-effect") {
-      const currentX = initialDragX + delta.x;
-      const relativeX = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+      const relativeX = currentRect.left - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
       let projectedFrame = Math.floor(relativeX / timelineZoom);
       if (projectedFrame < 0) projectedFrame = 0;
       startFrame = useProjectStore.getState().snapFrame(projectedFrame);
@@ -114,7 +115,7 @@ export const Workspace: React.FC = () => {
       name = activeData.name;
       type = activeData.type;
       
-      const frameDelta = Math.round(delta.x / timelineZoom);
+      const frameDelta = Math.round((delta?.x || 0) / timelineZoom);
       let newStart = activeData.startFrame + frameDelta;
       if (newStart < 0) newStart = 0;
       startFrame = useProjectStore.getState().snapFrame(newStart);
@@ -130,7 +131,7 @@ export const Workspace: React.FC = () => {
       name,
       type
     });
-  }, [project, timelineZoom, initialDragX]);
+  }, [project, timelineZoom]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     updateDragPreview(event);
@@ -163,8 +164,10 @@ export const Workspace: React.FC = () => {
         const rect = tContainer.getBoundingClientRect();
         const scrollLeft = tContainer.scrollLeft;
         
-        const currentX = initialDragX + delta.x;
-        const x = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+        const currentRect = active.rect.current.translated;
+        if (!currentRect) return;
+
+        const x = currentRect.left - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
         let startFrame = Math.floor(x / timelineZoom);
         if (startFrame < 0) startFrame = 0;
         startFrame = useProjectStore.getState().snapFrame(startFrame);
@@ -191,8 +194,10 @@ export const Workspace: React.FC = () => {
         const rect = tContainer.getBoundingClientRect();
         const scrollLeft = tContainer.scrollLeft;
         
-        const currentX = initialDragX + delta.x;
-        const x = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+        const currentRect = active.rect.current.translated;
+        if (!currentRect) return;
+
+        const x = currentRect.left - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
         let startFrame = Math.floor(x / timelineZoom);
         if (startFrame < 0) startFrame = 0;
         startFrame = useProjectStore.getState().snapFrame(startFrame);
@@ -233,7 +238,7 @@ export const Workspace: React.FC = () => {
         useProjectStore.getState().moveTimelineElement(el.id, newStart, newTrackIndex, isInsert);
       }
     },
-    [timelineElements, timelineZoom, project, initialDragX]
+    [timelineElements, timelineZoom, project]
   );
 
   useEffect(() => {
@@ -316,11 +321,64 @@ export const Workspace: React.FC = () => {
     setProject(null);
   };
 
+  const snapToTimelineModifier: Modifier = useCallback(({ transform, over, active }) => {
+    if (!over || !project || !active) return transform;
+    
+    const overIdStr = over.id.toString();
+    const trackMatch = overIdStr.match(/track-(\d+)/);
+    if (!trackMatch) return transform;
+    const trackIndex = parseInt(trackMatch[1], 10);
+
+    const tContainer = document.getElementById("timeline-scroll-container");
+    if (!tContainer) return transform;
+    const rect = tContainer.getBoundingClientRect();
+    const scrollLeft = tContainer.scrollLeft;
+
+    const data = active.data.current;
+    if (!data) return transform;
+
+    const initialRect = active.rect.current.initial;
+    if (!initialRect) return transform;
+
+    let startFrame = 0;
+    // CRITICAL: Use transform directly to avoid feedback loops with the translated rect
+    const currentX = initialRect.left + transform.x;
+
+    if (data.type === "new-location" || data.type === "new-effect") {
+      const relativeX = currentX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+      startFrame = useProjectStore.getState().snapFrame(Math.floor(relativeX / timelineZoom));
+    } else if (data.id && (data.type === "location" || data.type === "effect_detail")) {
+      const frameDelta = Math.round(transform.x / timelineZoom);
+      startFrame = useProjectStore.getState().snapFrame(data.startFrame + frameDelta);
+    } else {
+      return transform;
+    }
+
+    const snappedScreenX = (startFrame * timelineZoom) - scrollLeft + rect.left + TRACK_HEADER_WIDTH;
+    const snappedScreenY = rect.top + 24 + trackIndex * 48 + 4 - tContainer.scrollTop;
+
+    // Transform logic: the transform returned is what's added to the INITIAL position of the node.
+    // However, since we are using DragOverlay, dnd-kit handles the initial vs current.
+    // The most reliable way is to return the x/y that results in the snapped screen position.
+    
+    // Actually, for DragOverlay, the transform is from the original node's position to the mouse.
+    // If we want it at snappedScreenX, and its initial screen position was initialRect.left...
+    if (!initialRect) return transform;
+
+    return {
+      ...transform,
+      x: snappedScreenX - initialRect.left,
+      y: snappedScreenY - initialRect.top
+    };
+  }, [project, timelineZoom]);
+
   if (!project) return null;
 
   return (
     <DndContext 
       sensors={sensors} 
+      modifiers={[snapToTimelineModifier]}
+      collisionDetection={pointerWithin}
       onDragStart={handleDragStart} 
       onDragOver={handleDragOver}
       onDragMove={handleDragMove}
@@ -440,35 +498,60 @@ export const Workspace: React.FC = () => {
     
     <DragOverlay dropAnimation={null}>
       {activeDragItem ? (
-        <div className="opacity-80 scale-105 transition-transform">
+        <div className="opacity-90 scale-100 pointer-events-none">
           {(() => {
             const data = activeDragItem.data.current;
+            const isSnapped = !!dragPreview;
+            
             if (data?.type === "new-location") {
               return (
-                <div className="p-2 border rounded bg-[#1a1a1a] border-primary shadow-xl w-64">
-                  <div className="font-medium text-xs truncate text-primary">{data.payload.name}</div>
-                  <div className="text-[10px] text-zinc-500 truncate">{data.payload.display_name}</div>
+                <div 
+                  className={`border rounded flex items-center shadow-2xl ${
+                    isSnapped 
+                      ? "bg-orange-800 border-orange-400 h-10 px-3 ring-2 ring-white/20" 
+                      : "bg-[#1a1a1a] border-primary p-2 w-64"
+                  }`}
+                  style={{
+                    width: isSnapped && dragPreview ? dragPreview.durationFrames * timelineZoom : undefined
+                  }}
+                >
+                  <div className={`truncate ${isSnapped ? "text-[10px] font-bold text-orange-100 uppercase tracking-tight" : "text-xs font-medium text-primary"}`}>
+                    {data.payload.name}
+                  </div>
+                  {!isSnapped && <div className="text-[10px] text-zinc-500 truncate ml-2">{data.payload.display_name}</div>}
                 </div>
               );
             }
+            
             if (data?.type === "new-effect") {
               return (
-                <div className="p-2 border rounded bg-[#1a1a1a] border-primary shadow-xl flex items-center gap-2 w-48">
-                  <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center text-primary">
-                    <MagicWand size={14} weight="bold" />
+                <div 
+                  className={`border rounded flex items-center shadow-2xl ${
+                    isSnapped 
+                      ? "bg-purple-800 border-purple-400 h-10 px-3 ring-2 ring-white/20" 
+                      : "bg-[#1a1a1a] border-primary p-2 w-48"
+                  }`}
+                  style={{
+                    width: isSnapped && dragPreview ? dragPreview.durationFrames * timelineZoom : undefined
+                  }}
+                >
+                  <div className={`flex items-center gap-2 ${isSnapped ? "text-[10px] font-bold text-purple-100 uppercase tracking-tight" : "text-[11px] text-zinc-200"}`}>
+                    <MagicWand size={isSnapped ? 12 : 14} weight="bold" className={isSnapped ? "" : "text-primary"} />
+                    {data.name}
                   </div>
-                  <div className="font-medium text-[11px] text-zinc-200">{data.name}</div>
                 </div>
               );
             }
+            
             // For existing timeline clips
             if (data?.id && (data.type === "location" || data.type === "effect_detail")) {
+               const width = isSnapped && dragPreview ? dragPreview.durationFrames * timelineZoom : (activeDragItem.rect.current.initial?.width ?? 100);
                return (
                 <div 
-                  className={`h-8 px-2 border border-white rounded-sm flex items-center text-[10px] font-medium shadow-2xl ${
-                    data.type === 'location' ? 'bg-orange-800/90 text-orange-100' : 'bg-purple-800/90 text-purple-100'
+                  className={`h-10 px-3 border border-white rounded-sm flex items-center text-[10px] font-bold uppercase tracking-tight shadow-2xl ring-2 ring-white/20 ${
+                    data.type === 'location' ? 'bg-orange-800 border-orange-400 text-orange-100' : 'bg-purple-800 border-purple-400 text-purple-100'
                   }`} 
-                  style={{ width: activeDragItem.rect.current.initial?.width ?? 100 }}
+                  style={{ width }}
                 >
                   {data.name}
                 </div>
