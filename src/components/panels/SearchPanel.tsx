@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { MagnifyingGlass } from "@phosphor-icons/react";
+import { MagnifyingGlass, CircleNotch } from "@phosphor-icons/react";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
@@ -16,6 +16,7 @@ export const SearchPanel: React.FC = () => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
     setIsSearching(true);
+    setSearchResults([]);
     try {
       const response = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=10&polygon_geojson=1`
@@ -67,8 +68,9 @@ export const SearchPanel: React.FC = () => {
           </div>
         )}
         {isSearching && (
-          <div className="text-center text-xs text-muted-foreground mt-8 animate-pulse text-primary/70">
-            Searching...
+          <div className="flex flex-col items-center justify-center text-xs text-muted-foreground mt-8 text-primary/70 gap-2">
+            <CircleNotch size={24} className="animate-spin" />
+            <span>Searching...</span>
           </div>
         )}
         <div className="space-y-2 w-full min-w-0">

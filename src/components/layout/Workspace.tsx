@@ -25,7 +25,7 @@ import {
   FolderIcon,
   CaretDown,
   MagicWandIcon,
-  ListIcon,
+  DiamondsFour,
   InfoIcon
 } from "@phosphor-icons/react";
 import { DraggableEffectItem } from "../panels/DraggableEffectItem";
@@ -415,10 +415,10 @@ export const Workspace: React.FC = () => {
                     <MagicWandIcon size={14} weight="bold" />Effects
                   </TabsTrigger>
                   <TabsTrigger
-                    value="index"
+                    value="keyframes"
                     className="h-full text-[11px] font-medium gap-1.5 rounded-none border-r border-border px-4 data-[state=active]:bg-transparent data-[state=active]:text-primary text-zinc-400 transition-colors hover:bg-zinc-800/30 after:hidden shadow-none ml-auto"
                   >
-                    <ListIcon size={14} weight="bold" />Index
+                    <DiamondsFour size={14} weight="bold" />Keyframes
                   </TabsTrigger>
                 </TabsList>
               </div>
@@ -433,8 +433,8 @@ export const Workspace: React.FC = () => {
                   </div>
                 </div>
               </TabsContent>
-              <TabsContent value="index" className="flex-1 m-0 p-4 text-[10px] text-muted-foreground italic">
-                Timeline index coming soon...
+              <TabsContent value="keyframes" className="flex-1 m-0 p-4 text-[10px] text-muted-foreground italic">
+                Keyframes manager coming soon...
               </TabsContent>
             </Tabs>
           </aside>

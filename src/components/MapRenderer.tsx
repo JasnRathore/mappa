@@ -1142,10 +1142,18 @@ const MapRenderer: React.FC = () => {
           <div className="flex-1 flex flex-col min-h-0 p-8">
             <div
               ref={previewShellRef}
-              className="flex-1 rounded-sm border border-border bg-black shadow-[0_40px_100px_rgba(0,0,0,0.8)] flex items-center justify-center overflow-hidden relative group"
+              className={cn(
+                "flex-1 rounded-sm border flex items-center justify-center overflow-hidden relative group transition-all duration-300",
+                queueItems.length > 0
+                  ? "border-border/50 bg-black shadow-[0_40px_100px_rgba(0,0,0,0.4)]"
+                  : "border-border border-dashed bg-card/5"
+              )}
             >
               <div
-                className="relative bg-black shadow-2xl"
+                className={cn(
+                  "relative shadow-2xl transition-opacity duration-500",
+                  queueItems.length > 0 ? "opacity-100 bg-black" : "opacity-0 pointer-events-none"
+                )}
                 style={{
                   width: surfaceSize.width,
                   height: surfaceSize.height,
@@ -1155,56 +1163,68 @@ const MapRenderer: React.FC = () => {
                 <div ref={mapContainerRef} className="w-full h-full" />
               </div>
 
-              {/* Status HUD (Top Left) */}
-              <div className="absolute top-4 left-4 flex flex-col gap-2">
-                <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-border flex items-center gap-3">
-                   <div className={`w-1.5 h-1.5 rounded-full ${isRendering ? 'bg-destructive animate-pulse' : 'bg-emerald-500'} `} />
-                   <span className="text-[9px] font-bold tracking-[.2em] text-foreground uppercase">{renderStatus.title}</span>
+              {queueItems.length === 0 && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/40 text-center select-none pointer-events-none">
+                  <Monitor size={32} strokeWidth={1} className="mb-4 opacity-50" />
+                  <p className="text-[10px] uppercase tracking-widest font-bold">Preview Inactive</p>
+                  <p className="text-[9px] mt-1.5 opacity-70">Add a job to the render queue to view its preview.</p>
                 </div>
-                {renderStatus.detail && (
-                  <div className="px-3 py-1 text-[8px] bg-black/40 text-muted-foreground font-mono truncate max-w-[400px]">
-                    {renderStatus.detail}
-                  </div>
-                )}
-              </div>
+              )}
 
-              {/* Transport Controls Overlay */}
-              <div className="absolute inset-x-0 bottom-0 p-6 bg-gradient-to-t from-black/90 to-transparent flex flex-col gap-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                <div className="flex items-center justify-center gap-6">
-                   <button 
-                     onClick={() => void handlePreviewPlaybackToggle()}
-                     className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all"
-                   >
-                     {isPreviewPlaying ? <Pause size={20} weight="fill" /> : <Play size={20} weight="fill" />}
-                   </button>
-                </div>
-                
-                <div className="space-y-2">
-                    <div className="flex items-center justify-between text-[8px] font-bold text-muted-foreground uppercase tracking-widest">
-                       <span>{renderStatus.phase === "idle" ? "Timeline Position" : "Rendering Progress"}</span>
-                       <span>{Math.round(renderStatus.progress)}%</span>
+              {queueItems.length > 0 && (
+                <>
+                  {/* Status HUD (Top Left) */}
+                  <div className="absolute top-4 left-4 flex flex-col gap-2">
+                    <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-white/10 flex items-center gap-3">
+                       <div className={`w-1.5 h-1.5 rounded-full ${isRendering ? 'bg-destructive animate-pulse' : 'bg-emerald-500'} `} />
+                       <span className="text-[9px] font-bold tracking-[.2em] text-foreground uppercase">{renderStatus.title}</span>
                     </div>
-                    <div className="h-1.5 bg-muted/30 rounded-full overflow-hidden">
-                       <div 
-                         className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(var(--primary),0.5)]" 
-                         style={{ width: `${renderStatus.progress}%` }} 
+                    {renderStatus.detail && (
+                      <div className="px-3 py-1 text-[8px] bg-black/60 rounded backdrop-blur-sm text-zinc-400 font-mono truncate max-w-[400px]">
+                        {renderStatus.detail}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Transport Controls Overlay */}
+                  <div className="absolute inset-x-0 bottom-0 p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent flex flex-col gap-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <div className="flex items-center justify-center gap-6">
+                       <button 
+                         onClick={() => void handlePreviewPlaybackToggle()}
+                         className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all backdrop-blur-sm"
+                       >
+                         {isPreviewPlaying ? <Pause size={18} weight="fill" /> : <Play size={18} weight="fill" />}
+                       </button>
+                    </div>
+                    
+                    <div className="space-y-2 max-w-2xl mx-auto w-full px-4">
+                        <div className="flex items-center justify-between text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
+                           <span>{renderStatus.phase === "idle" ? "Timeline Position" : "Rendering Progress"}</span>
+                           <span>{Math.round(renderStatus.progress)}%</span>
+                        </div>
+                        <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                           <div 
+                             className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(var(--primary),0.5)]" 
+                             style={{ width: `${renderStatus.progress}%` }} 
+                           />
+                        </div>
+                     </div>
+                       <input
+                         type="range"
+                         min={exportSettings?.inFrame || 0}
+                         max={exportSettings?.outFrame || 100}
+                         value={previewFrame}
+                         onChange={(e) => {
+                           setIsPreviewPlaying(false);
+                           setPreviewFrame(Number(e.target.value));
+                         }}
+                         className="w-full max-w-2xl mx-auto h-1 accent-primary bg-zinc-700/50 rounded-full appearance-none cursor-pointer mt-2"
                        />
-                    </div>
-                 </div>
-                   <input
-                     type="range"
-                     min={exportSettings.inFrame}
-                     max={exportSettings.outFrame}
-                     value={previewFrame}
-                     onChange={(e) => {
-                       setIsPreviewPlaying(false);
-                       setPreviewFrame(Number(e.target.value));
-                     }}
-                     className="w-full h-1 accent-primary bg-zinc-700/50 rounded-full appearance-none cursor-pointer"
-                   />
-                </div>
-              </div>
+                  </div>
+                </>
+              )}
             </div>
+          </div>
         </main>
 
         {/* Render Queue (Right Sidebar) */}
