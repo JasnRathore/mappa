@@ -9,7 +9,7 @@ interface Props {
 }
 
 export const DraggableEffectItem: React.FC<Props> = ({ id, name, type }) => {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `effect-item-${id}`,
     data: {
       type: "new-effect",

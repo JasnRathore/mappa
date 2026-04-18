@@ -1,9 +1,8 @@
-import React, { useCallback } from "react";
-import { restrictToWindowEdges } from "@dnd-kit/modifiers";
+import React from "react";
 import { Track } from "./Track";
 import { TimecodeRuler } from "./TimecodeRuler";
 import { useProjectStore } from "../../store/useProjectStore";
-import type { TimelineElement } from "../../types";
+
 import {
   MagnifyingGlassMinus,
   MagnifyingGlassPlus,
@@ -15,13 +14,11 @@ import {
 
 const TRACK_COUNT = 4;
 const TRACK_HEADER_WIDTH = 96;
-const TRACK_HEIGHT = 48;
 
 export const Timeline: React.FC = () => {
   const {
     project,
     currentFrame,
-    setTimelineElements,
     timelineZoom,
     setTimelineZoom,
     activeTool,
@@ -31,10 +28,6 @@ export const Timeline: React.FC = () => {
     addMarker,
     updateProjectSettings,
   } = useProjectStore();
-
-  if (!project) return null;
-
-  const totalWidth = project.durationFrames * timelineZoom;
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -51,6 +44,10 @@ export const Timeline: React.FC = () => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [addMarker, currentFrame]);
+
+  if (!project) return null;
+
+  const totalWidth = project.durationFrames * timelineZoom;
 
   return (
       <div

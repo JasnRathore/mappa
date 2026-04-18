@@ -13,8 +13,6 @@ import {
   Gear,
   Info,
   SignOut,
-  CaretDown,
-  Export,
   CardsThreeIcon
 } from "@phosphor-icons/react";
 import { useProjectStore } from "../../store/useProjectStore";
@@ -26,8 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut
 } from "../ui/dropdown-menu";
-import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
+
 
 const appWindow = getCurrentWindow();
 
@@ -42,7 +39,6 @@ interface TitleBarProps {
 export const TitleBar: React.FC<TitleBarProps> = ({
   onNew,
   onDeliver,
-  deliverLabel = "Deliver",
   hideDeliver = false,
   hideAllMenus = false
 }) => {

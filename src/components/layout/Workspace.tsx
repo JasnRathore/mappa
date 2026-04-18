@@ -15,20 +15,15 @@ import { ViewerPanel } from "../panels/ViewerPanel";
 import { InspectorPanel } from "../panels/InspectorPanel";
 import { Timeline } from "../timeline/Timeline";
 import { useProjectStore } from "../../store/useProjectStore";
-import { Button } from "../ui/button";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { saveRenderData } from "../../db";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 import {
   SlidersHorizontal,
-  Export,
   FolderIcon,
-  CaretDown,
   MagicWandIcon,
   DiamondsFour,
   InfoIcon
 } from "@phosphor-icons/react";
 import { DraggableEffectItem } from "../panels/DraggableEffectItem";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 import { TitleBar } from "./TitleBar";
 
 const TRACK_HEADER_WIDTH = 96;
@@ -36,8 +31,6 @@ const TRACK_HEADER_WIDTH = 96;
 export const Workspace: React.FC = () => {
   const {
     project,
-    projectName,
-    filePath,
     saveProject,
     loadProject,
     isPlaying,
@@ -47,10 +40,8 @@ export const Workspace: React.FC = () => {
     rippleDeleteTimelineElement,
     activeElementId,
     timelineElements,
-    setTimelineElements,
     timelineZoom,
     trackStates,
-    setProject,
     dragPreview,
   } = useProjectStore();
 
@@ -283,7 +274,7 @@ export const Workspace: React.FC = () => {
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [isPlaying, project, activeElementId, setIsPlaying, setFrame, deleteTimelineElement, rippleDeleteTimelineElement]);
+  }, [isPlaying, project, activeElementId, setIsPlaying, setFrame, deleteTimelineElement, rippleDeleteTimelineElement, loadProject, saveProject]);
 
   const handleDeliver = async () => {
     if (!project) return;
@@ -311,20 +302,7 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const handleSave = async () => {
-    const success = await saveProject();
-    if (success) {
-      // Maybe show a toast later
-    }
-  };
 
-  const handleOpen = async () => {
-    await loadProject();
-  };
-
-  const handleNewProject = () => {
-    setProject(null);
-  };
 
   const snapToTimelineModifier: Modifier = useCallback(({ transform, over, active }) => {
     if (!over || !project || !active) return transform;

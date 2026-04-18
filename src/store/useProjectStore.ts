@@ -63,7 +63,7 @@ interface ProjectState {
   snapFrame: (frame: number) => number;
 
   // Keyframe Actions
-  addKeyframe: (elementId: string, property: string, frameOffset: number, value: any) => void;
+  addKeyframe: (elementId: string, property: string, frameOffset: number, value: unknown) => void;
   removeKeyframe: (elementId: string, keyframeId: string) => void;
 }
 
@@ -286,7 +286,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const el = state.timelineElements.find(e => e.id === elementId);
     if (!el) return state;
 
-    const newKeyframe: any = {
+    const newKeyframe = {
       id: `kf-${Date.now()}`,
       frameOffset,
       property,
@@ -403,9 +403,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await get().saveProject();
 
       return { success: true };
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("New project error:", err);
-      return { success: false, error: `System error: ${err.message || 'Failed to initialize project'}. Check permissions.` };
+      return { success: false, error: `System error: ${(err as Error).message || 'Failed to initialize project'}. Check permissions.` };
     }
   },
 
@@ -467,9 +467,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
 
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to save project:", err);
-      alert(`Save Error: ${err.message || String(err)}`);
+      alert(`Save Error: ${(err as Error).message || String(err)}`);
       return false;
     }
   },

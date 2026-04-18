@@ -11,7 +11,7 @@ interface Props {
 const TRACK_HEADER_WIDTH = 96;
 
 export const Track: React.FC<Props> = ({ trackIndex }) => {
-  const { timelineElements, project, timelineZoom, trackStates, toggleTrackState, dragPreview } = useProjectStore();
+  const { timelineElements, project, timelineZoom, trackStates, toggleTrackState } = useProjectStore();
   const elements = timelineElements.filter((e) => e.trackIndex === trackIndex);
   const trackState = trackStates[trackIndex] || { locked: false, hidden: false };
 

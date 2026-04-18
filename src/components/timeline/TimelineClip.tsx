@@ -1,6 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import type { TimelineElement } from "../../types";
 import { useProjectStore } from "../../store/useProjectStore";
 
@@ -26,7 +25,7 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
   const width = element.durationFrames * timelineZoom;
   const left = element.startFrame * timelineZoom;
 
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: element.id,
     data: element,
     disabled: activeTool === "blade" || isLocked // Disable dragging if blade active or track locked
@@ -85,7 +84,7 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
       }
     };
 
-    const handlePointerUp = (e: PointerEvent) => {
+    const handlePointerUp = () => {
       setTrimEdge(null);
       trimState.current = null;
       // Release pointer capture if we can find the element or just let it happen on the original target

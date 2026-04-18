@@ -166,7 +166,7 @@ export const resolveCameraStateAtFrame = (
   return targetState;
 };
 
-const resolveKeyframedValue = (kfs: Keyframe[], offset: number, defaultValue: any, property: string) => {
+const resolveKeyframedValue = (kfs: Keyframe[], offset: number, defaultValue: unknown, property: string) => {
   if (kfs.length === 0) return defaultValue;
 
   // Find surrounding keyframes
@@ -399,44 +399,7 @@ const applyTimelineDecorations = ({
   });
 };
 
-const getTargetCameraState = (
-  element: TimelineElement,
-  previousState: CameraState
-): CameraState => {
-  const loc = element.locationPayload;
-  if (!loc) {
-    return previousState;
-  }
 
-  switch (loc.transition) {
-    case "pan":
-      return {
-        ...previousState,
-        center: loc.center,
-      };
-    case "zoom_in":
-      return {
-        center: loc.center,
-        zoom: loc.zoom + 1,
-        bearing: loc.bearing || 0,
-        pitch: loc.pitch || 0,
-      };
-    case "zoom_out":
-      return {
-        center: loc.center,
-        zoom: loc.zoom - 1,
-        bearing: loc.bearing || 0,
-        pitch: loc.pitch || 0,
-      };
-    default:
-      return {
-        center: loc.center,
-        zoom: loc.zoom,
-        bearing: loc.bearing || 0,
-        pitch: loc.pitch || 0,
-      };
-  }
-};
 
 const getTransitionFrameCount = (element: TimelineElement, fps: number) => {
   const loc = element.locationPayload;

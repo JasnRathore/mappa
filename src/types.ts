@@ -52,7 +52,7 @@ export interface Keyframe {
   id: string;
   frameOffset: number; // relative to element start
   property: string; // "center", "zoom", "bearing", "pitch", "opacity", "detailLevel"
-  value: any;
+  value: unknown;
   easing?: string; // "linear", "ease-in", "ease-out", "ease-in-out"
 }
 

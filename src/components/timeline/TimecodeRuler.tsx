@@ -15,9 +15,7 @@ export const TimecodeRuler: React.FC = () => {
   const { project, timelineZoom, setFrame, markers, updateProjectSettings, snapFrame } = useProjectStore();
   const [activeHandle, setActiveHandle] = useState<"start" | "end" | null>(null);
 
-  if (!project) return null;
-
-  const { durationFrames, fps, startFrame, endFrame } = project;
+  const { durationFrames, fps, startFrame, endFrame } = project || { durationFrames: 0, fps: 30, startFrame: 0, endFrame: 0 };
   const totalWidth = durationFrames * timelineZoom;
 
   // Calculate reasonable tick interval
@@ -26,12 +24,15 @@ export const TimecodeRuler: React.FC = () => {
   const effectiveFpt = Math.max(fps, framesPerTick);
 
   const ticks = useMemo(() => {
+    if (!project) return [];
     const result: { frame: number; label: string }[] = [];
     for (let f = 0; f <= durationFrames; f += effectiveFpt) {
       result.push({ frame: f, label: formatTime(f, fps) });
     }
     return result;
-  }, [durationFrames, effectiveFpt, fps]);
+  }, [durationFrames, effectiveFpt, fps, project]);
+
+  if (!project) return null;
 
   const handleRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (activeHandle) return; // ignore clicks while dragging handles

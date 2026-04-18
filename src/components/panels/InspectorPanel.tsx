@@ -4,8 +4,27 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Slider } from "../ui/slider";
 import { Separator } from "../ui/separator";
-import { Camera, Drop } from "@phosphor-icons/react";
+import { Camera } from "@phosphor-icons/react";
 import { Button } from "../ui/button";
+
+interface KeyframeIconProps {
+  property: string;
+  value: unknown;
+  hasKeyframe: (property: string) => boolean;
+  toggleKeyframe: (property: string, value: unknown) => void;
+}
+
+const KeyframeIcon = ({ property, value, hasKeyframe, toggleKeyframe }: KeyframeIconProps) => {
+  const active = hasKeyframe(property);
+  return (
+    <button 
+      onClick={() => toggleKeyframe(property, value)}
+      className={`hover:text-primary transition-colors ${active ? 'text-primary' : 'text-muted-foreground/40'}`}
+    >
+      <div className={`w-3 h-3 rotate-45 border-2 ${active ? 'bg-primary border-primary' : 'border-current'}`} />
+    </button>
+  );
+};
 
 export const InspectorPanel: React.FC = () => {
   const activeElementId = useProjectStore(state => state.activeElementId);
@@ -17,14 +36,14 @@ export const InspectorPanel: React.FC = () => {
   const addKeyframe = useProjectStore(state => state.addKeyframe);
   const removeKeyframe = useProjectStore(state => state.removeKeyframe);
 
-  const updateLocationPayload = useCallback((updates: Record<string, any>) => {
+  const updateLocationPayload = useCallback((updates: Record<string, unknown>) => {
     if (!element || !element.locationPayload) return;
     updateTimelineElement(element.id, {
       locationPayload: { ...element.locationPayload, ...updates }
     });
   }, [element, updateTimelineElement]);
 
-  const toggleKeyframe = useCallback((property: string, value: any) => {
+  const toggleKeyframe = useCallback((property: string, value: unknown) => {
     if (!element) return;
     const offset = currentFrame - element.startFrame;
     const existing = (element.keyframes || []).find(k => k.property === property && k.frameOffset === offset);
@@ -42,17 +61,6 @@ export const InspectorPanel: React.FC = () => {
     return (element.keyframes || []).some(k => k.property === property && k.frameOffset === offset);
   }, [element, currentFrame]);
 
-  const KeyframeIcon = ({ property, value }: { property: string, value: any }) => {
-    const active = hasKeyframe(property);
-    return (
-      <button 
-        onClick={() => toggleKeyframe(property, value)}
-        className={`hover:text-primary transition-colors ${active ? 'text-primary' : 'text-muted-foreground/40'}`}
-      >
-        <div className={`w-3 h-3 rotate-45 border-2 ${active ? 'bg-primary border-primary' : 'border-current'}`} />
-      </button>
-    );
-  };
 
   if (!element) {
     return (
@@ -79,7 +87,7 @@ export const InspectorPanel: React.FC = () => {
             
             <div className="grid grid-cols-4 items-center gap-2">
               <div className="col-span-1 flex items-center justify-end pr-2 gap-2">
-                <KeyframeIcon property="zoom" value={p.zoom} />
+                <KeyframeIcon property="zoom" value={p.zoom} hasKeyframe={hasKeyframe} toggleKeyframe={toggleKeyframe} />
                 <Label className="text-xs">Zoom</Label>
               </div>
               <div className="col-span-3 flex items-center gap-3">
@@ -118,7 +126,7 @@ export const InspectorPanel: React.FC = () => {
 
             <div className="grid grid-cols-4 items-center gap-2">
               <div className="col-span-1 flex items-center justify-end pr-2 gap-2">
-                <KeyframeIcon property="pitch" value={p.pitch || 0} />
+                <KeyframeIcon property="pitch" value={p.pitch || 0} hasKeyframe={hasKeyframe} toggleKeyframe={toggleKeyframe} />
                 <Label className="text-xs">Pitch</Label>
               </div>
               <div className="col-span-3 flex items-center gap-3">
@@ -139,7 +147,7 @@ export const InspectorPanel: React.FC = () => {
 
             <div className="grid grid-cols-4 items-center gap-2">
               <div className="col-span-1 flex items-center justify-end pr-2 gap-2">
-                <KeyframeIcon property="bearing" value={p.bearing || 0} />
+                <KeyframeIcon property="bearing" value={p.bearing || 0} hasKeyframe={hasKeyframe} toggleKeyframe={toggleKeyframe} />
                 <Label className="text-xs">Bearing</Label>
               </div>
               <div className="col-span-3 flex items-center gap-3">
@@ -169,7 +177,7 @@ export const InspectorPanel: React.FC = () => {
               <select 
                   value={p.transition || "fly"}
                   className="col-span-3 h-7 text-xs px-2 bg-background border border-input rounded-md flex h-9 w-full bg-transparent px-3 py-1 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onChange={(e) => updateLocationPayload({ transition: e.target.value as any })}
+                  onChange={(e) => updateLocationPayload({ transition: e.target.value })}
                 >
                   <option value="jump">Jump (Instant)</option>
                   <option value="fly">Fly To</option>
@@ -202,7 +210,7 @@ export const InspectorPanel: React.FC = () => {
              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Coordinates</h3>
              <div className="grid grid-cols-4 items-center gap-2">
               <div className="col-span-1 flex items-center justify-end pr-2 gap-2">
-                <KeyframeIcon property="center" value={p.center} />
+                <KeyframeIcon property="center" value={p.center} hasKeyframe={hasKeyframe} toggleKeyframe={toggleKeyframe} />
                 <Label className="text-xs">Long</Label>
               </div>
               <Input 

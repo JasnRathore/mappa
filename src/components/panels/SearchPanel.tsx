@@ -22,8 +22,8 @@ export const SearchPanel: React.FC = () => {
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=10&polygon_geojson=1`
       );
       const data = await response.json();
-      const formatted: LocationPayload[] = data.map((item: any) => ({
-        id: (item.place_id as number).toString() + Math.random(),
+      const formatted: LocationPayload[] = data.map((item: Record<string, unknown>) => ({
+        id: (item.place_id as string | number).toString() + Math.random(),
         name: (item.display_name as string).split(",")[0],
         display_name: item.display_name as string,
         center: [parseFloat(item.lon as string), parseFloat(item.lat as string)],
@@ -34,7 +34,7 @@ export const SearchPanel: React.FC = () => {
         transitionMS: 2000,
         type: item.type as string,
         color: "#f97316",
-        geojson: item.geojson as any,
+        geojson: item.geojson as LocationPayload["geojson"],
       }));
       setSearchResults(formatted);
     } catch (err) {

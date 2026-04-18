@@ -7,7 +7,7 @@ interface Props {
 }
 
 export const DraggableSearchResult: React.FC<Props> = ({ payload }) => {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `search-res-${payload.id}`,
     data: {
       type: "new-location",

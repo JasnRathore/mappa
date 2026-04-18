@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as pickPath } from "@tauri-apps/plugin-dialog";
-import { open as openPath } from "@tauri-apps/plugin-shell";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { loadRenderData } from "../db";
@@ -29,7 +28,6 @@ import {
   CheckCircle,
   Queue,
   Warning,
-  X,
   CircleNotch
 } from "@phosphor-icons/react";
 import { Button } from "./ui/button";
@@ -107,8 +105,7 @@ const MAP_TRANSFORM_REQUEST = createCachedMapTransformRequest();
 
 installMapResourceCacheProtocol();
 
-const isTauriDesktop = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -271,8 +268,7 @@ const createDefaultSettings = (project: ProjectSettings): ExportSettings => ({
   encoder: "libx264",
 });
 
-const summarizeQueueItem = (item: QueueItem) =>
-  `${item.width}x${item.height} - ${item.fps} fps - ${item.encoder}`;
+
 
 const queueItemFromSettings = (settings: ExportSettings, fps: number): QueueItem => ({
   ...settings,
@@ -309,7 +305,6 @@ const MapRenderer: React.FC = () => {
 
   const [renderStatus, setRenderStatus] = useState<RenderStatus>(EMPTY_STATUS);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
-  const [isPreloadingPreview, setIsPreloadingPreview] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -528,26 +523,7 @@ const MapRenderer: React.FC = () => {
     setQueueItems((current) => syncQueuePatch(current, id, patch));
   }, []);
 
-  const handlePresetSelect = useCallback(
-    (presetId: PresetId) => {
-      if (!project || !exportSettings) return;
 
-      const preset = RESOLUTION_PRESETS.find((item) => item.id === presetId);
-      if (!preset) return;
-
-      if (preset.id === "source") {
-        updateSettings({ width: project.width, height: project.height, presetId: "source" });
-        return;
-      }
-
-      updateSettings({
-        width: preset.width,
-        height: preset.height,
-        presetId: preset.id,
-      });
-    },
-    [exportSettings, project, updateSettings]
-  );
 
   const handlePickDirectory = useCallback(async () => {
     if (!exportSettings) return;
@@ -603,20 +579,7 @@ const MapRenderer: React.FC = () => {
     setSelectedQueueId(queuedJob.id);
   }, [exportSettings, project]);
 
-  const handleQueueSelect = useCallback((item: QueueItem) => {
-    setSelectedQueueId(item.id);
-    setExportSettings({
-      presetId: item.presetId,
-      fileName: item.fileName,
-      directory: item.directory,
-      width: item.width,
-      height: item.height,
-      inFrame: item.inFrame,
-      outFrame: item.outFrame,
-      encoder: item.encoder,
-    });
-    setPreviewFrame(item.inFrame);
-  }, []);
+
 
   const handleRemoveQueueItem = useCallback((id: string) => {
     setQueueItems((current) => current.filter((item) => item.id !== id));
@@ -664,7 +627,7 @@ const MapRenderer: React.FC = () => {
 
       const restoreFrame = previewFrame;
       if (previewState) {
-        setIsPreloadingPreview(true);
+        // No additional action needed
       }
 
       try {
@@ -699,7 +662,7 @@ const MapRenderer: React.FC = () => {
       } finally {
         setPreviewFrame(restoreFrame);
         if (previewState) {
-          setIsPreloadingPreview(false);
+          // No additional action needed
         }
       }
     },
@@ -789,7 +752,7 @@ const MapRenderer: React.FC = () => {
         encoder: job.encoder,
       });
     },
-    [project, updateQueueItem]
+    [project, trackStates, updateQueueItem]
   );
 
   const renderSingleJob = useCallback(
@@ -898,42 +861,9 @@ const MapRenderer: React.FC = () => {
     [renderSingleJob]
   );
 
-  const handleRenderCurrent = useCallback(async () => {
-    if (!project || !exportSettings) return;
 
-    const job = queueItemFromSettings(
-      {
-        ...exportSettings,
-        fileName: sanitizeFileName(exportSettings.fileName),
-      },
-      project.fps
-    );
 
-    setQueueItems((current) => [...current, job]);
-    setSelectedQueueId(job.id);
-    await runQueuedJobs([job.id]);
-  }, [exportSettings, project, runQueuedJobs]);
 
-  const handleRenderSelected = useCallback(async () => {
-    if (!selectedQueueId) {
-      setError("Select a queued export before rendering it.");
-      return;
-    }
-
-    await runQueuedJobs([selectedQueueId]);
-  }, [runQueuedJobs, selectedQueueId]);
-
-  const handleOpenLastExport = useCallback(async () => {
-    const selectedItem = queueItems.find((item) => item.id === selectedQueueId);
-    const target = selectedItem?.resultPath ?? lastExportPath ?? selectedItem?.directory ?? exportSettings?.directory;
-
-    if (!target) {
-      setError("There is no exported file or folder to open yet.");
-      return;
-    }
-
-    await openPath(target);
-  }, [exportSettings?.directory, lastExportPath, queueItems, selectedQueueId]);
 
   const handlePreviewPlaybackToggle = useCallback(async () => {
     if (!exportSettings || !project) {
@@ -993,7 +923,7 @@ const MapRenderer: React.FC = () => {
 
   if (!project || !exportSettings) return null;
 
-  const totalFrames = exportSettings.outFrame - exportSettings.inFrame + 1;
+
   const timeLabel = formatTimecode(previewFrame, project.fps);
   const previewWidth = Math.max(1, Math.round(surfaceSize.width * previewScale));
   const previewHeight = Math.max(1, Math.round(surfaceSize.height * previewScale));

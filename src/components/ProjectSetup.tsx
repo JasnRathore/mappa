@@ -4,8 +4,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ProjectSettings } from "../types";
 import {
   Folder,
-  Gear,
-  Monitor,
   Trash,
   Plus,
   MagnifyingGlass,
@@ -46,7 +44,6 @@ const ProjectManager: React.FC<Props> = () => {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
-  const [activeTab, setActiveTab] = useState("all");
 
   // New Project Form State
   const [name, setName] = useState("Untitled Project");
@@ -66,7 +63,9 @@ const ProjectManager: React.FC<Props> = () => {
   }, []);
 
   const openEditor = async (path: string) => {
-    const editorId = `editor-${Date.now()}`;
+    // Generate a reasonably unique ID for the window
+    // eslint-disable-next-line react-hooks/purity
+    const editorId = `editor-${Math.floor(Math.random() * 1e9)}`;
     const webview = new WebviewWindow(editorId, {
       url: `?mode=editor&projectPath=${encodeURIComponent(path)}`,
       title: "Mappa Editor",
