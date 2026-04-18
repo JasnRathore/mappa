@@ -13,6 +13,8 @@ import type { TimelineElement, TimelineElementType } from "../../types";
 import { SearchPanel } from "../panels/SearchPanel";
 import { ViewerPanel } from "../panels/ViewerPanel";
 import { InspectorPanel } from "../panels/InspectorPanel";
+import { saveRenderData } from "../../db";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Timeline } from "../timeline/Timeline";
 import { useProjectStore } from "../../store/useProjectStore";
 import {
@@ -292,7 +294,7 @@ export const Workspace: React.FC = () => {
         visible: false,
       });
 
-      webview.once("tauri://error", (e) => {
+      webview.once("tauri://error", (e: unknown) => {
         console.error("Failed to create render window", e);
         alert("Failed to start render engine window. Make sure you have the correct permissions.");
       });

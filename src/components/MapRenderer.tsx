@@ -41,8 +41,19 @@ import { TitleBar } from "./layout/TitleBar";
 type EncoderId = "libx264" | "h264_nvenc" | "h264_qsv" | "h264_amf";
 type QueueStatus = "queued" | "rendering" | "done" | "error";
 type RenderPhase = "idle" | "preloading" | "capturing" | "encoding" | "complete" | "error";
+type PresetId = "source" | "hd" | "fhd" | "4k" | "social" | "square" | "custom";
+
+const RESOLUTION_PRESETS: Array<{ id: PresetId; label: string; width: number; height: number }> = [
+  { id: "source", label: "Project Source", width: 1920, height: 1080 },
+  { id: "fhd", label: "1080p FHD", width: 1920, height: 1080 },
+  { id: "hd", label: "720p HD", width: 1280, height: 720 },
+  { id: "4k", label: "4K UHD", width: 3840, height: 2160 },
+  { id: "social", label: "Social (9:16)", width: 1080, height: 1920 },
+  { id: "square", label: "Square (1:1)", width: 1080, height: 1080 },
+];
 
 interface ExportSettings {
+  presetId: PresetId;
   fileName: string;
   directory: string;
   width: number;
@@ -440,6 +451,7 @@ const MapRenderer: React.FC = () => {
         map: mapRef.current,
         frameIndex: previewFrame,
         timelineElements,
+        trackStates,
         fps: project.fps,
         cache: previewAnimatedCacheRef.current,
       });

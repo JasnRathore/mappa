@@ -42,6 +42,7 @@ export interface LocationPayload {
   highlightEnabled?: boolean;
   fadeInFrames?: number;
   fadeOutFrames?: number;
+  opacity?: number;
 }
 
 export interface DetailEffectPayload {

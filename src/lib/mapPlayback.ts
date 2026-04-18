@@ -1,6 +1,7 @@
+
 import maplibregl from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
-import type { TimelineElement } from "../types";
+import type { TimelineElement, Keyframe } from "../types";
 
 const HIGHLIGHT_OPACITY = 0.4;
 
@@ -112,11 +113,11 @@ export const resolveCameraStateAtFrame = (
   // Use the top-most clip as the primary driver
   const el = activeLocations[0];
   const loc = el.locationPayload;
-  
+
   if (!loc) return DEFAULT_CAMERA_STATE;
 
   const frameOffset = frameIndex - el.startFrame;
-  
+
   // Group keyframes by property once per frame
   const kfGroups: Record<string, Keyframe[]> = {};
   (el.keyframes || []).forEach(kf => {
@@ -131,32 +132,32 @@ export const resolveCameraStateAtFrame = (
   const resolvedBearing = resolveKeyframedValue(kfGroups["bearing"] || [], frameOffset, loc.bearing || 0, "bearing");
 
   const targetState: CameraState = {
-    center: resolvedCenter,
-    zoom: resolvedZoom,
-    pitch: resolvedPitch,
-    bearing: resolvedBearing
+    center: resolvedCenter as [number, number],
+    zoom: resolvedZoom as number,
+    pitch: resolvedPitch as number,
+    bearing: resolvedBearing as number
   };
 
   // If there are NO keyframes at all, we fall back to the old transition-at-start logic
   if (!el.keyframes || el.keyframes.length === 0) {
-     const transition = loc.transition || "fly";
-     const transitionFrames = getTransitionFrameCount(el, fps);
-     const transitionEndFrame = el.startFrame + transitionFrames - 1;
+    const transition = loc.transition || "fly";
+    const transitionFrames = getTransitionFrameCount(el, fps);
+    const transitionEndFrame = el.startFrame + transitionFrames - 1;
 
-     if (transition !== "jump" && frameIndex <= transitionEndFrame) {
-        const previousState = resolveCameraStateAtFrame(el.startFrame - 1, timelineElements, fps, trackStates);
-        const progress = getTransitionProgress(frameIndex, el.startFrame, transitionFrames);
-        const easedProgress = applyTransitionEasing(progress, transition);
-        const resolvedState = interpolateCameraState(previousState, targetState, easedProgress);
+    if (transition !== "jump" && frameIndex <= transitionEndFrame) {
+      const previousState = resolveCameraStateAtFrame(el.startFrame - 1, timelineElements, fps, trackStates);
+      const progress = getTransitionProgress(frameIndex, el.startFrame, transitionFrames);
+      const easedProgress = applyTransitionEasing(progress, transition);
+      const resolvedState = interpolateCameraState(previousState, targetState, easedProgress);
 
-        
-        cameraMemo.set(memoKey, resolvedState);
-        return resolvedState;
-     }
+
+      cameraMemo.set(memoKey, resolvedState);
+      return resolvedState;
+    }
   }
 
   cameraMemo.set(memoKey, targetState);
-  
+
   // Keep memo size in check
   if (cameraMemo.size > 2000) {
     const firstKey = cameraMemo.keys().next().value;
@@ -171,12 +172,12 @@ const resolveKeyframedValue = (kfs: Keyframe[], offset: number, defaultValue: un
 
   // Find surrounding keyframes
   const nextIndex = kfs.findIndex(k => k.frameOffset >= offset);
-  
+
   if (nextIndex === -1) {
     // Past the last keyframe
     return kfs[kfs.length - 1].value;
   }
-  
+
   if (nextIndex === 0) {
     if (kfs[0].frameOffset === offset) return kfs[0].value;
     // Before the first keyframe
@@ -185,26 +186,30 @@ const resolveKeyframedValue = (kfs: Keyframe[], offset: number, defaultValue: un
 
   const prev = kfs[nextIndex - 1];
   const next = kfs[nextIndex];
-  
+
   const span = next.frameOffset - prev.frameOffset;
   const progress = (offset - prev.frameOffset) / span;
-  
+
   // Use easing from the 'next' keyframe which dictates the arrival
   const easing = next.easing || "ease-in-out";
   const eased = applyTransitionEasing(progress, easing === "ease-in-out" ? "ease" : "linear");
 
   if (property === "center") {
+    const p = prev.value as [number, number];
+    const n = next.value as [number, number];
     return [
-      lerp(prev.value[0], next.value[0], eased),
-      lerp(prev.value[1], next.value[1], eased)
+      lerp(p[0], n[0], eased),
+      lerp(p[1], n[1], eased)
     ] as [number, number];
   }
 
   if (property === "bearing") {
-    return prev.value + shortestAngleDelta(prev.value, next.value) * eased;
+    const p = prev.value as number;
+    const n = next.value as number;
+    return p + shortestAngleDelta(p, n) * eased;
   }
 
-  return lerp(prev.value, next.value, eased);
+  return lerp(prev.value as number, next.value as number, eased);
 };
 
 const applyAnimatedTimelineCamera = ({
@@ -216,8 +221,8 @@ const applyAnimatedTimelineCamera = ({
   cache,
 }: ApplyTimelineFrameParams) => {
   const activeElements = timelineElements.filter(
-    (el) => 
-      frameIndex >= el.startFrame && 
+    (el) =>
+      frameIndex >= el.startFrame &&
       frameIndex < el.startFrame + el.durationFrames &&
       (!trackStates || !trackStates[el.trackIndex]?.hidden)
   );

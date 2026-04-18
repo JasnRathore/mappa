@@ -132,6 +132,7 @@ export const preloadTimelineMapResources = async ({
       map,
       frameIndex: frame,
       timelineElements,
+      trackStates: {},
       fps,
       cache,
     });
@@ -144,6 +145,7 @@ export const preloadTimelineMapResources = async ({
     map,
     frameIndex: startFrame,
     timelineElements,
+    trackStates: {},
     fps,
     cache: createMapPlaybackCache(),
   });
@@ -167,7 +169,7 @@ export const createTimelinePreloadKey = ({
         return `${element.id}:${element.startFrame}:${element.durationFrames}:${element.trackIndex}`;
       }
 
-      const state = resolveCameraStateAtFrame(element.startFrame, timelineElements, fps);
+      const state = resolveCameraStateAtFrame(element.startFrame, timelineElements, fps, {});
       return [
         element.id,
         element.startFrame,
