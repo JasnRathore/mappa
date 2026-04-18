@@ -52,6 +52,10 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
     if (isLocked) return;
     e.stopPropagation();
     e.preventDefault();
+    
+    // Capture the pointer to ensure we get the pointerup event even if mouse leaves the handle
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    
     setTrimEdge(edge);
     trimState.current = {
       startX: e.clientX,
@@ -64,7 +68,7 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
   useEffect(() => {
     if (!trimEdge) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const handlePointerMove = (e: PointerEvent) => {
       if (!trimState.current) return;
       const { startX, origStart, origDuration, isRipple } = trimState.current;
       const deltaX = e.clientX - startX;
@@ -81,16 +85,19 @@ export const TimelineClip: React.FC<Props> = ({ element }) => {
       }
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = (e: PointerEvent) => {
       setTrimEdge(null);
       trimState.current = null;
+      // Release pointer capture if we can find the element or just let it happen on the original target
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [trimEdge, element.id, timelineZoom, snapFrame, updateTimelineElement]);
 
