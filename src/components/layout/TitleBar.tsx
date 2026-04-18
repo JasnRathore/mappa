@@ -108,7 +108,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <div className="flex items-center h-full text-[11px] font-medium text-muted-foreground">
             {/* File Menu */}
             <DropdownMenu>
-              <DropdownMenuTrigger className="px-3 h-8 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
+              <DropdownMenuTrigger className="px-3 h-6 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
                 File
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56 mt-1">
@@ -153,7 +153,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             {/* View Menu */}
             {project && (
               <DropdownMenu>
-                <DropdownMenuTrigger className="px-3 h-8 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
+                <DropdownMenuTrigger className="px-3 h-6 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
                   View
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-56 mt-1">
@@ -178,7 +178,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
             {/* Help Menu */}
             <DropdownMenu>
-              <DropdownMenuTrigger className="px-3 h-8 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
+              <DropdownMenuTrigger className="px-3 h-6 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
                 Help
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-48 mt-1">
@@ -196,7 +196,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
               <button
                 onClick={onDeliver}
                 disabled={!onDeliver}
-                className="px-3 h-8 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
+                className="px-3 h-6 hover:bg-accent hover:text-accent-foreground rounded outline-none flex items-center gap-1 transition-colors">
                 Render
               </button>
             )}
