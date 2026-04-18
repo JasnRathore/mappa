@@ -101,6 +101,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       height: 800,
       resizable: true,
       decorations: false,
+      maximized: true,
     });
 
     webview.once("tauri://error", (e) => {

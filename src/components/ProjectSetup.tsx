@@ -74,6 +74,7 @@ const ProjectManager: React.FC<Props> = () => {
       height: 800,
       resizable: true,
       decorations: false,
+      maximized: true,
     });
 
     webview.once("tauri://created", () => {

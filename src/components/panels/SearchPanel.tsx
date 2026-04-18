@@ -71,7 +71,7 @@ export const SearchPanel: React.FC = () => {
             Searching...
           </div>
         )}
-        <div className="space-y-2">
+        <div className="space-y-2 w-full min-w-0">
           {searchResults.map((res) => (
             <DraggableSearchResult key={res.id} payload={res} />
           ))}
