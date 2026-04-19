@@ -1,17 +1,17 @@
 use eframe::egui::{CentralPanel, Panel};
 use eframe::{self, egui};
 
-mod engine;
 mod animation;
-mod transitions;
-mod ui_graph;
-mod timeline;
+mod engine;
 mod geocoding;
 mod map_plugin;
+mod timeline;
+mod transitions;
+mod ui_graph;
 
 use engine::MapEngine;
-use ui_graph::GraphEditor;
 use timeline::Timeline;
+use ui_graph::GraphEditor;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions::default();
@@ -23,8 +23,8 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 #[derive(PartialEq, Clone, Copy)]
 enum InspectorTab {
@@ -64,23 +64,30 @@ impl MyApp {
 
 impl eframe::App for MyApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx();
-        
+        let ctx = ui.ctx().clone();
+
         // --- 1. EVALUATION PHASE ---
         // Ensure the engine ticks and resolves all animations BEFORE any UI reads state.
         self.map.update();
 
-
-
-        let dissolve = self.map.parameter_cache.get("Dissolve")
+        let dissolve = self
+            .map
+            .parameter_cache
+            .get("Dissolve")
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
-        let wipe = self.map.parameter_cache.get("Wipe")
+        let wipe = self
+            .map
+            .parameter_cache
+            .get("Wipe")
             .map(|c| c.value.as_float())
             .unwrap_or(1.0);
 
-        let bearing = self.map.parameter_cache.get("Bearing")
+        let bearing = self
+            .map
+            .parameter_cache
+            .get("Bearing")
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
@@ -88,14 +95,20 @@ impl eframe::App for MyApp {
         if self.map.is_playing {
             ctx.request_repaint();
         }
-        
+
         egui::TopBottomPanel::top("menu_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New").clicked() { ui.close(); }
-                    if ui.button("Open").clicked() { ui.close(); }
+                    if ui.button("New").clicked() {
+                        ui.close();
+                    }
+                    if ui.button("Open").clicked() {
+                        ui.close();
+                    }
                     ui.separator();
-                    if ui.button("Save").clicked() { ui.close(); }
+                    if ui.button("Save").clicked() {
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut self.show_graph, "Graph Editor");
@@ -108,79 +121,119 @@ impl eframe::App for MyApp {
             .show_inside(ui, |ui| {
                 ui.heading("MEDIA POOL");
                 ui.separator();
-                
+
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut self.search_query);
-                    if ui.button("Search").clicked() && !self.is_searching.load(std::sync::atomic::Ordering::Relaxed) {
-                        self.is_searching.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if ui.button("Search").clicked()
+                        && !self.is_searching.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.is_searching
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         let query = self.search_query.clone();
                         let results_arc = Arc::clone(&self.search_results);
                         let searching_arc = Arc::clone(&self.is_searching);
-                        
+                        // egui::Context is Arc-backed — cheap to clone and Send
+                        let ctx_clone = ctx.clone();
+
                         std::thread::spawn(move || {
-                            if let Ok(res) = crate::geocoding::search(&query) {
-                                if let Ok(mut locked) = results_arc.lock() {
-                                    *locked = res;
+                            match crate::geocoding::search(&query) {
+                                Ok(results) => {
+                                    // --- Phase 1: store raw results, kill the spinner ---
+                                    {
+                                        let mut locked = results_arc.lock().unwrap();
+                                        *locked = results;
+                                    }
+                                    searching_arc
+                                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                                    ctx_clone.request_repaint(); // UI now shows names immediately
+
+                                    // --- Phase 2: triangulate each result progressively ---
+                                    let count = results_arc.lock().unwrap().len();
+                                    for i in 0..count {
+                                        {
+                                            let mut locked = results_arc.lock().unwrap();
+                                            if let Some(loc) = locked.get_mut(i) {
+                                                crate::geocoding::prepare_location(loc);
+                                            }
+                                        }
+                                        ctx_clone.request_repaint(); // repaint as each one finishes
+                                    }
+                                }
+                                Err(_) => {
+                                    searching_arc
+                                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                                    ctx_clone.request_repaint();
                                 }
                             }
-                            searching_arc.store(false, std::sync::atomic::Ordering::Relaxed);
                         });
                     }
                 });
-                
+
                 if self.is_searching.load(std::sync::atomic::Ordering::Relaxed) {
                     ui.spinner();
                 } else {
                     // drag_to_scroll(false) is critical — otherwise the ScrollArea
                     // consumes all pointer drag events before the labels ever see them.
-                    egui::ScrollArea::vertical().drag_to_scroll(false).show(ui, |ui| {
-                        if let Ok(locked) = self.search_results.lock() {
-                            for (_i, res) in locked.iter().enumerate() {
-                                let is_dragging_this = self.dragging_location.as_ref()
-                                    .map(|d| d.display_name == res.display_name)
-                                    .unwrap_or(false);
+                    egui::ScrollArea::vertical()
+                        .drag_to_scroll(false)
+                        .show(ui, |ui| {
+                            if let Ok(locked) = self.search_results.lock() {
+                                for (_i, res) in locked.iter().enumerate() {
+                                    let is_dragging_this = self
+                                        .dragging_location
+                                        .as_ref()
+                                        .map(|d| d.display_name == res.display_name)
+                                        .unwrap_or(false);
 
-                                let desired_size = egui::vec2(ui.available_width(), 36.0);
-                                let (row_rect, row_resp) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+                                    let desired_size = egui::vec2(ui.available_width(), 36.0);
+                                    let (row_rect, row_resp) = ui.allocate_exact_size(
+                                        desired_size,
+                                        egui::Sense::click_and_drag(),
+                                    );
 
-                                // Background: highlight if being dragged
-                                let bg = if is_dragging_this {
-                                    egui::Color32::from_rgb(0, 80, 160)
-                                } else if row_resp.hovered() {
-                                    egui::Color32::from_gray(55)
-                                } else {
-                                    egui::Color32::from_gray(40)
-                                };
-                                ui.painter().rect_filled(row_rect, 4.0, bg);
+                                    // Background: highlight if being dragged
+                                    let bg = if is_dragging_this {
+                                        egui::Color32::from_rgb(0, 80, 160)
+                                    } else if row_resp.hovered() {
+                                        egui::Color32::from_gray(55)
+                                    } else {
+                                        egui::Color32::from_gray(40)
+                                    };
+                                    ui.painter().rect_filled(row_rect, 4.0, bg);
 
-                                // Icon + label text
-                                ui.painter().text(
-                                    row_rect.left_center() + egui::vec2(10.0, 0.0),
-                                    egui::Align2::LEFT_CENTER,
-                                    format!("📍 {}", &res.display_name),
-                                    egui::FontId::proportional(12.0),
-                                    egui::Color32::WHITE,
-                                );
+                                    // Icon + label text
+                                    ui.painter().text(
+                                        row_rect.left_center() + egui::vec2(10.0, 0.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        format!("📍 {}", &res.display_name),
+                                        egui::FontId::proportional(12.0),
+                                        egui::Color32::WHITE,
+                                    );
 
-                                if row_resp.dragged() {
-                                    self.dragging_location = Some(res.clone());
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    if row_resp.dragged() {
+                                        self.dragging_location = Some(res.clone());
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    }
+
+                                    if row_resp.drag_stopped() {
+                                        // Don't clear here — let the timeline consume and clear it
+                                    }
+
+                                    if row_resp.hovered() {
+                                        egui::show_tooltip_at_pointer(
+                                            ui.ctx(),
+                                            ui.layer_id(),
+                                            egui::Id::new("loc_tip"),
+                                            |ui| {
+                                                ui.label("Drag onto the Timeline");
+                                            },
+                                        );
+                                    }
+
+                                    ui.add_space(2.0);
                                 }
-
-                                if row_resp.drag_stopped() {
-                                    // Don't clear here — let the timeline consume and clear it
-                                }
-
-                                if row_resp.hovered() {
-                                    egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new("loc_tip"), |ui| {
-                                        ui.label("Drag onto the Timeline");
-                                    });
-                                }
-
-                                ui.add_space(2.0);
                             }
-                        }
-                    });
+                        });
                 }
             });
 
@@ -194,29 +247,29 @@ impl eframe::App for MyApp {
                     ui.selectable_value(&mut self.inspector_tab, InspectorTab::Inspector, "📋 Inspector");
                 });
                 ui.separator();
-                
+
                 match self.inspector_tab {
                     InspectorTab::Camera => {
                         ui.label(egui::RichText::new("Camera Settings").strong());
                         ui.add_space(5.0);
-                
+
                         ui.label(format!("Frame: {}", self.map.current_frame));
-                        
+
                         ui.separator();
                         ui.label("Map Viewport");
-                
+
                 let current_zoom = self.map.zoom();
                 let mut zoom_val = current_zoom;
-                
+
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
-                    let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed() || 
+                    let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed() ||
                                   ui.add(egui::DragValue::new(&mut zoom_val).speed(0.1)).changed();
-                    
+
                     if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
                         let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
                         let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
-                        
+
                         if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                             if has_kf {
                                 ch.keyframes.retain(|k| k.frame != self.map.current_frame);
@@ -245,17 +298,17 @@ impl eframe::App for MyApp {
                 let current_pos = self.map.parameter_cache.get("Position")
                     .map(|c| c.value.clone())
                     .unwrap_or(animation::Value::Position(0.0, 20.0));
-                
+
                 if let animation::Value::Position(mut lon, mut lat) = current_pos {
                     // Pos X Row
                     ui.horizontal(|ui| {
                         ui.label("Pos X:");
                         let changed = ui.add(egui::DragValue::new(&mut lon).speed(0.1)).changed();
-                        
+
                         if let Some(ch) = self.map.track.channels.get_mut("Position") {
                             let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
                             let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
-                            
+
                             if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                                 if has_kf {
                                     ch.keyframes.retain(|k| k.frame != self.map.current_frame);
@@ -285,11 +338,11 @@ impl eframe::App for MyApp {
                     ui.horizontal(|ui| {
                         ui.label("Pos Y:");
                         let changed = ui.add(egui::DragValue::new(&mut lat).speed(0.1)).changed();
-                        
+
                         if let Some(ch) = self.map.track.channels.get_mut("Position") {
                             let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
                             let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
-                            
+
                             if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                                 if has_kf {
                                     ch.keyframes.retain(|k| k.frame != self.map.current_frame);
@@ -370,7 +423,7 @@ impl eframe::App for MyApp {
                                         if ui.button("🚀 Snap to Fit").clicked() {
                                         snap_loc = Some(clip.location.clone());
                                     }
-                                    
+
                                     ui.add_space(5.0);
                                     if ui.button("🗑 Delete Clip").clicked() {
                                         delete_requested = true;
@@ -404,38 +457,41 @@ impl eframe::App for MyApp {
             .default_size(200.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                   // Playback Transport Controls
-                   if ui.button("⏮").on_hover_text("Go to Start").clicked() {
-                       self.map.current_frame = 0;
-                       self.map.is_playing = false;
-                   }
-                   
-                   if ui.button("◄").on_hover_text("Previous Frame").clicked() {
-                       if self.map.current_frame > 0 {
-                           self.map.current_frame -= 1;
-                       }
-                       self.map.is_playing = false;
-                   }
-                   
-                   let play_icon = if self.map.is_playing { "⏸" } else { "▶" };
-                   if ui.button(play_icon).on_hover_text("Play/Pause").clicked() {
-                       self.map.is_playing = !self.map.is_playing;
-                   }
-                   
-                   if ui.button("►").on_hover_text("Next Frame").clicked() {
-                       if self.map.current_frame < 1800 {
-                           self.map.current_frame += 1;
-                       }
-                       self.map.is_playing = false;
-                   }
-                   
-                   if ui.button("⏭").on_hover_text("Go to End").clicked() {
-                       self.map.current_frame = 1800; // Based on timeline max
-                       self.map.is_playing = false;
-                   }
+                    // Playback Transport Controls
+                    if ui.button("⏮").on_hover_text("Go to Start").clicked() {
+                        self.map.current_frame = 0;
+                        self.map.is_playing = false;
+                    }
 
-                   ui.add_space(20.0);
-                   ui.label(egui::RichText::new(format!("Frame: {:04}", self.map.current_frame)).monospace());
+                    if ui.button("◄").on_hover_text("Previous Frame").clicked() {
+                        if self.map.current_frame > 0 {
+                            self.map.current_frame -= 1;
+                        }
+                        self.map.is_playing = false;
+                    }
+
+                    let play_icon = if self.map.is_playing { "⏸" } else { "▶" };
+                    if ui.button(play_icon).on_hover_text("Play/Pause").clicked() {
+                        self.map.is_playing = !self.map.is_playing;
+                    }
+
+                    if ui.button("►").on_hover_text("Next Frame").clicked() {
+                        if self.map.current_frame < 1800 {
+                            self.map.current_frame += 1;
+                        }
+                        self.map.is_playing = false;
+                    }
+
+                    if ui.button("⏭").on_hover_text("Go to End").clicked() {
+                        self.map.current_frame = 1800; // Based on timeline max
+                        self.map.is_playing = false;
+                    }
+
+                    ui.add_space(20.0);
+                    ui.label(
+                        egui::RichText::new(format!("Frame: {:04}", self.map.current_frame))
+                            .monospace(),
+                    );
                 });
 
                 ui.separator();
@@ -446,11 +502,16 @@ impl eframe::App for MyApp {
                     }
                 } else {
                     let old_sel = self.selected_clip;
-                    let dropped = self.timeline.ui(ui, &mut self.map, &self.dragging_location, &mut self.selected_clip);
+                    let dropped = self.timeline.ui(
+                        ui,
+                        &mut self.map,
+                        &self.dragging_location,
+                        &mut self.selected_clip,
+                    );
                     if self.selected_clip != old_sel && self.selected_clip.is_some() {
                         self.inspector_tab = InspectorTab::Inspector;
                     }
-                    
+
                     let pointer_up = ui.input(|i| !i.pointer.any_down());
                     if dropped {
                         // Successful drop into timeline
@@ -466,23 +527,33 @@ impl eframe::App for MyApp {
             // Apply Wipe Effect
             let rect = ui.max_rect();
             let wipe_width = rect.width() * wipe as f32;
-            let wipe_rect = egui::Rect::from_min_max(rect.min, rect.min + egui::vec2(wipe_width, rect.height()));
-            
+            let wipe_rect = egui::Rect::from_min_max(
+                rect.min,
+                rect.min + egui::vec2(wipe_width, rect.height()),
+            );
+
             ui.set_clip_rect(wipe_rect);
             self.map.ui(ui);
-            
+
             // Compass / Bearing Visualization
             let compass_pos = rect.right_top() + egui::vec2(-60.0, 60.0);
             let painter = ui.painter();
             painter.circle_filled(compass_pos, 40.0, egui::Color32::from_gray(30));
-            
+
             let angle = bearing.to_radians() as f32;
             let needle_end = compass_pos + egui::vec2(angle.sin() * 30.0, -angle.cos() * 30.0);
-            painter.line_segment([compass_pos, needle_end], egui::Stroke::new(3.0, egui::Color32::RED));
+            painter.line_segment(
+                [compass_pos, needle_end],
+                egui::Stroke::new(3.0, egui::Color32::RED),
+            );
 
             // Dissolve Overlay
             if dissolve > 0.0 {
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK.linear_multiply(dissolve as f32));
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    egui::Color32::BLACK.linear_multiply(dissolve as f32),
+                );
             }
         });
     }

@@ -24,7 +24,7 @@ pub struct MapEngine {
 
 impl MapEngine {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let user_agent = HeaderValue::from_static("mappar/0.1 (paradisegamer98@gmail.com)");
+        let user_agent = HeaderValue::from_static("mappar/0.1 (concise.offical@gmail.com)");
 
         let options = HttpOptions {
             user_agent: Some(user_agent),
@@ -32,7 +32,7 @@ impl MapEngine {
         };
 
         let mut track = Track::new("Map");
-        
+
         // Initialize default channels
         let mut zoom_ch = Channel::new("Zoom");
         zoom_ch.insert_keyframe(Keyframe {
@@ -101,7 +101,7 @@ impl MapEngine {
                 self.current_frame += 1;
                 self.accumulator -= frame_time;
             }
-            
+
             // Ensure we top out at 1800 frames based on timeline max or loop
             if self.current_frame > 1800 {
                 self.current_frame = 1800;
@@ -109,7 +109,6 @@ impl MapEngine {
                 self.last_update = None;
                 self.accumulator = 0.0;
             }
-
         } else {
             self.last_update = None;
             self.accumulator = 0.0;
@@ -122,16 +121,19 @@ impl MapEngine {
             // A channel is dirty if frame moved OR it was manually flagged (e.g. keyframe edited)
             if frame_moved || channel.dirty {
                 let val = channel.get_value_at(self.current_frame);
-                
-                self.parameter_cache.insert(name.clone(), ParameterCache {
-                    value: val,
-                    dirty: false,
-                });
-                
+
+                self.parameter_cache.insert(
+                    name.clone(),
+                    ParameterCache {
+                        value: val,
+                        dirty: false,
+                    },
+                );
+
                 channel.dirty = false;
             }
         }
-        
+
         self.last_evaluated_frame = Some(self.current_frame);
 
         // Sync with MapMemory (The GPU Matrix drivers)
@@ -149,27 +151,36 @@ impl MapEngine {
         // update() is now handled by the parent MyApp to synchronize caching.
 
         // Reactive Lookup: Always pull from cache unless re-solve is needed
-        let _zoom = self.parameter_cache.get("Zoom")
+        let _zoom = self
+            .parameter_cache
+            .get("Zoom")
             .map(|c| c.value.as_float())
             .unwrap_or(10.0);
-        
-        let center = self.parameter_cache.get("Position")
+
+        let center = self
+            .parameter_cache
+            .get("Position")
             .map(|c| c.value.as_pos())
             .unwrap_or(Position::new(0.0, 20.0));
 
-        let _bearing = self.parameter_cache.get("Bearing")
+        let _bearing = self
+            .parameter_cache
+            .get("Bearing")
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
-        let _pitch = self.parameter_cache.get("Pitch")
+        let _pitch = self
+            .parameter_cache
+            .get("Pitch")
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
-        let map = Map::new(Some(&mut self.tiles), &mut self.map_memory, center)
-            .with_plugin(crate::map_plugin::MapHighlightPlugin {
+        let map = Map::new(Some(&mut self.tiles), &mut self.map_memory, center).with_plugin(
+            crate::map_plugin::MapHighlightPlugin {
                 current_frame: self.current_frame,
                 track: &self.track,
-            });
+            },
+        );
         ui.add(map);
 
         if self.is_playing {
@@ -178,14 +189,17 @@ impl MapEngine {
     }
 
     pub fn zoom(&self) -> f64 {
-        self.parameter_cache.get("Zoom")
+        self.parameter_cache
+            .get("Zoom")
             .map(|c| c.value.as_float())
             .unwrap_or(self.map_memory.zoom())
     }
 
     pub fn fit_to_location(&mut self, location: &crate::geocoding::LocationResult) {
-        if location.boundingbox.len() < 4 { return; }
-        
+        if location.boundingbox.len() < 4 {
+            return;
+        }
+
         // Parse bounding box: [minlat, maxlat, minlon, maxlon]
         let min_lat = location.boundingbox[0].parse::<f64>().unwrap_or(0.0);
         let max_lat = location.boundingbox[1].parse::<f64>().unwrap_or(0.0);
@@ -194,7 +208,7 @@ impl MapEngine {
 
         let center_lat = (min_lat + max_lat) / 2.0;
         let center_lon = (min_lon + max_lon) / 2.0;
-        
+
         let lat_span = (max_lat - min_lat).abs().max(0.001);
         let lon_span = (max_lon - min_lon).abs().max(0.001);
 
@@ -204,10 +218,10 @@ impl MapEngine {
         // We want span * (256 * 2^Z / 360) < 800 (80% of viewport)
         // 2^Z < (800 * 360) / (span * 256)
         // Z < log2(1125 / span)
-        
+
         let zoom_lat = (1125.0 / (lat_span * 2.0)).log2(); // lat span is more restricted
         let zoom_lon = (1125.0 / lon_span).log2();
-        
+
         let target_zoom = zoom_lat.min(zoom_lon).clamp(1.0, 19.0);
 
         // Insert keyframes at current frame
@@ -228,7 +242,7 @@ impl MapEngine {
                 flags: KeyframeFlags::NONE,
             });
         }
-        
+
         // Trigger a solve
         self.last_evaluated_frame = None;
     }
