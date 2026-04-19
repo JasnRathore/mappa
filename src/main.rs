@@ -219,12 +219,38 @@ impl eframe::App for MyApp {
             .default_size(200.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                   ui.set_max_width(80.0);
-                   if ui.button(if self.map.is_playing { "⏸" } else { "▶" }).clicked() {
+                   // Playback Transport Controls
+                   if ui.button("⏮").on_hover_text("Go to Start").clicked() {
+                       self.map.current_frame = 0;
+                       self.map.is_playing = false;
+                   }
+                   
+                   if ui.button("◄").on_hover_text("Previous Frame").clicked() {
+                       if self.map.current_frame > 0 {
+                           self.map.current_frame -= 1;
+                       }
+                       self.map.is_playing = false;
+                   }
+                   
+                   let play_icon = if self.map.is_playing { "⏸" } else { "▶" };
+                   if ui.button(play_icon).on_hover_text("Play/Pause").clicked() {
                        self.map.is_playing = !self.map.is_playing;
                    }
                    
-                   ui.label(format!("Frame: {}", self.map.current_frame));
+                   if ui.button("►").on_hover_text("Next Frame").clicked() {
+                       if self.map.current_frame < 1800 {
+                           self.map.current_frame += 1;
+                       }
+                       self.map.is_playing = false;
+                   }
+                   
+                   if ui.button("⏭").on_hover_text("Go to End").clicked() {
+                       self.map.current_frame = 1800; // Based on timeline max
+                       self.map.is_playing = false;
+                   }
+
+                   ui.add_space(20.0);
+                   ui.label(egui::RichText::new(format!("Frame: {:04}", self.map.current_frame)).monospace());
                 });
 
                 ui.separator();
