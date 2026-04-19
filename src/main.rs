@@ -746,18 +746,6 @@ impl MyApp {
             ui.set_clip_rect(wipe_rect);
             editor.map.ui(ui);
 
-            // Compass / Bearing Visualization
-            let compass_pos = rect.right_top() + egui::vec2(-60.0, 60.0);
-            let painter = ui.painter();
-            painter.circle_filled(compass_pos, 40.0, egui::Color32::from_gray(30));
-
-            let angle = bearing.to_radians() as f32;
-            let needle_end = compass_pos + egui::vec2(angle.sin() * 30.0, -angle.cos() * 30.0);
-            painter.line_segment(
-                [compass_pos, needle_end],
-                egui::Stroke::new(3.0, egui::Color32::RED),
-            );
-
             // Dissolve Overlay
             if dissolve > 0.0 {
                 ui.painter().rect_filled(
