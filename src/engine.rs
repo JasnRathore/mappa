@@ -18,6 +18,7 @@ pub struct MapEngine {
     pub is_playing: bool,
     pub last_update: Option<std::time::Instant>,
     pub accumulator: f64,
+    pub last_evaluated_frame: Option<u32>,
     pub parameter_cache: HashMap<String, ParameterCache>,
 }
 
@@ -77,14 +78,13 @@ impl MapEngine {
             is_playing: false,
             last_update: None,
             accumulator: 0.0,
+            last_evaluated_frame: None,
             parameter_cache: HashMap::new(),
         }
     }
 
     /// The "Tick": Evaluates the animation state
     pub fn update(&mut self) {
-        let prev_frame = self.current_frame;
-        
         if self.is_playing {
             let now = std::time::Instant::now();
             let dt = if let Some(last) = self.last_update {
@@ -115,7 +115,7 @@ impl MapEngine {
             self.accumulator = 0.0;
         }
 
-        let frame_moved = self.current_frame != prev_frame;
+        let frame_moved = self.last_evaluated_frame != Some(self.current_frame);
 
         // Evaluation Engine: The Solver
         for (name, channel) in &mut self.track.channels {
@@ -131,6 +131,8 @@ impl MapEngine {
                 channel.dirty = false;
             }
         }
+        
+        self.last_evaluated_frame = Some(self.current_frame);
 
         // Sync with MapMemory (The GPU Matrix drivers)
         if let Some(cache) = self.parameter_cache.get("Zoom") {
