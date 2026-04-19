@@ -20,7 +20,6 @@ pub struct MapEngine {
     pub accumulator: f64,
     pub last_evaluated_frame: Option<u32>,
     pub parameter_cache: HashMap<String, ParameterCache>,
-    pub triangulation_cache: HashMap<String, Vec<usize>>,
 }
 
 impl MapEngine {
@@ -81,7 +80,6 @@ impl MapEngine {
             accumulator: 0.0,
             last_evaluated_frame: None,
             parameter_cache: HashMap::new(),
-            triangulation_cache: HashMap::new(),
         }
     }
 
@@ -171,7 +169,6 @@ impl MapEngine {
             .with_plugin(crate::map_plugin::MapHighlightPlugin {
                 current_frame: self.current_frame,
                 track: &self.track,
-                triangulation_cache: &mut self.triangulation_cache,
             });
         ui.add(map);
 
