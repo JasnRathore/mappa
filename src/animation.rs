@@ -125,6 +125,29 @@ impl Channel {
 pub struct Track {
     pub name: String,
     pub channels: HashMap<String, Channel>,
+    pub object_tracks: Vec<ObjectTrack>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Clip {
+    pub name: String,
+    pub start_frame: u32,
+    pub end_frame: u32,
+    pub location: crate::geocoding::LocationResult,
+}
+
+pub struct ObjectTrack {
+    pub name: String,
+    pub clips: Vec<Clip>,
+}
+
+impl ObjectTrack {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            clips: Vec::new(),
+        }
+    }
 }
 
 impl Track {
@@ -132,6 +155,7 @@ impl Track {
         Self {
             name: name.to_string(),
             channels: HashMap::new(),
+            object_tracks: Vec::new(),
         }
     }
 

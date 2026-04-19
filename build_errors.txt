@@ -19,26 +19,54 @@ warning: unused imports: `KeyframeFlags`, `Track`, and `Value`
 2 | use crate::animation::{Channel, KeyframeFlags, Track, Value};
   |                                 ^^^^^^^^^^^^^  ^^^^^  ^^^^^
 
-warning: use of deprecated type alias `eframe::egui::TopBottomPanel`: Use Panel::top or Panel::bottom instead
-  --> src\main.rs:67:15
+warning: unused import: `Ordering`
+  --> src\main.rs:27:37
    |
-67 |         egui::TopBottomPanel::top("menu_bar").show_inside(ui, |ui| {
+27 | use std::sync::atomic::{AtomicBool, Ordering};
+   |                                     ^^^^^^^^
+
+warning: use of deprecated type alias `eframe::egui::TopBottomPanel`: Use Panel::top or Panel::bottom instead
+  --> src\main.rs:78:15
+   |
+78 |         egui::TopBottomPanel::top("menu_bar").show_inside(ui, |ui| {
    |               ^^^^^^^^^^^^^^
    |
    = note: `#[warn(deprecated)]` on by default
 
-error[E0609]: no field `raw_scroll_delta` on type `&InputState`
-   --> src\timeline.rs:199:41
+warning: use of deprecated type alias `eframe::egui::SidePanel`: Use Panel::left or Panel::right instead
+  --> src\main.rs:92:15
+   |
+92 |         egui::SidePanel::left("media_pool")
+   |               ^^^^^^^^^
+
+error[E0050]: method `run` has 4 parameters but the declaration in trait `run` has 5
+  --> src\map_plugin.rs:11:12
+   |
+11 |     fn run(&mut self, response: &Response, painter: Painter, projector: &Projector) {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected 5 parameters, found 4
+   |
+   = note: `run` from trait: `fn(Box<Self>, &mut Ui, &eframe::egui::Response, &Projector, &MapMemory)`
+
+error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+   --> src\timeline.rs:245:21
     |
-199 |         let zoom_delta = ui.input(|i| i.raw_scroll_delta.y);
-    |                                         ^^^^^^^^^^^^^^^^ unknown field
+245 |             painter.rect_stroke(clip_rect, 2.0, Stroke::new(1.0, Color32::from_rgb(0, 150, 255)));
+    |                     ^^^^^^^^^^^------------------------------------------------------------------ argument #4 of type `StrokeKind` is missing
     |
-    = note: available fields are: `raw`, `pointer`, `smooth_scroll_delta`, `pixels_per_point`, `max_texture_side` ... and 8 others
+note: method defined here
+   --> C:\Users\Jasn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-0.34.1\src\painter.rs:447:12
+    |
+447 |     pub fn rect_stroke(
+    |            ^^^^^^^^^^^
+help: provide the argument
+    |
+245 |             painter.rect_stroke(clip_rect, 2.0, Stroke::new(1.0, Color32::from_rgb(0, 150, 255)), /* StrokeKind */);
+    |                                                                                                 ++++++++++++++++++
 
 warning: unused variable: `zoom`
-   --> src\engine.rs:119:13
+   --> src\engine.rs:152:13
     |
-119 |         let zoom = self.parameter_cache.get("Zoom")
+152 |         let zoom = self.parameter_cache.get("Zoom")
     |             ^^^^ help: if this is intentional, prefix it with an underscore: `_zoom`
     |
     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
@@ -53,6 +81,49 @@ warning: variable does not need to be mutable
    |
    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
 
-For more information about this error, try `rustc --explain E0609`.
-warning: `mappar` (bin "mappar") generated 6 warnings
-error: could not compile `mappar` (bin "mappar") due to 1 previous error; 6 warnings emitted
+warning: unused variable: `track_idx`
+  --> src\timeline.rs:89:14
+   |
+89 |         for (track_idx, obj_track) in engine.track.object_tracks.iter_mut().enumerate() {
+   |              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_track_idx`
+
+warning: unused variable: `response`
+  --> src\map_plugin.rs:11:23
+   |
+11 |     fn run(&mut self, response: &Response, painter: Painter, projector: &Projector) {
+   |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_response`
+
+error[E0382]: borrow of moved value: `response`
+   --> src\main.rs:130:36
+    |
+124 | ...                   let response = ui.add(egui::Label::new(&res.display_name).sense(egui::Sense::drag()));
+    |                           --------   ---------------------------------------------------------------------- this reinitialization might get skipped
+    |                           |
+    |                           move occurs because `response` has type `eframe::egui::Response`, which does not implement the `Copy` trait
+...
+127 | ...                       response.on_hover_text("Drag to Timeline");
+    |                                    --------------------------------- `response` moved due to this method call
+...
+130 | ...                   if response.drag_started() {
+    |                          ^^^^^^^^ value borrowed here after move
+    |
+note: `eframe::egui::Response::on_hover_text` takes ownership of the receiver `self`, which moves `response`
+   --> C:\Users\Jasn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-0.34.1\src\response.rs:695:26
+    |
+695 |     pub fn on_hover_text(self, text: impl Into<WidgetText>) -> Self {
+    |                          ^^^^
+help: you can `clone` the value and consume it, but this might not be your desired behavior
+    |
+127 |                                     response.clone().on_hover_text("Drag to Timeline");
+    |                                             ++++++++
+
+warning: unused variable: `id`
+   --> src\main.rs:123:37
+    |
+123 | ...                   let id = ui.id().with(format!("loc_{}", i));
+    |                           ^^ help: if this is intentional, prefix it with an underscore: `_id`
+
+Some errors have detailed explanations: E0050, E0061, E0382.
+For more information about an error, try `rustc --explain E0050`.
+warning: `mappar` (bin "mappar") generated 11 warnings
+error: could not compile `mappar` (bin "mappar") due to 3 previous errors; 11 warnings emitted

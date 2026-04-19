@@ -149,7 +149,7 @@ impl MapEngine {
         // update() is now handled by the parent MyApp to synchronize caching.
 
         // Reactive Lookup: Always pull from cache unless re-solve is needed
-        let zoom = self.parameter_cache.get("Zoom")
+        let _zoom = self.parameter_cache.get("Zoom")
             .map(|c| c.value.as_float())
             .unwrap_or(10.0);
         
@@ -165,7 +165,11 @@ impl MapEngine {
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
-        let map = Map::new(Some(&mut self.tiles), &mut self.map_memory, center);
+        let map = Map::new(Some(&mut self.tiles), &mut self.map_memory, center)
+            .with_plugin(crate::map_plugin::MapHighlightPlugin {
+                current_frame: self.current_frame,
+                track: &self.track,
+            });
         ui.add(map);
 
         if self.is_playing {
@@ -177,5 +181,55 @@ impl MapEngine {
         self.parameter_cache.get("Zoom")
             .map(|c| c.value.as_float())
             .unwrap_or(self.map_memory.zoom())
+    }
+
+    pub fn fit_to_location(&mut self, location: &crate::geocoding::LocationResult) {
+        if location.boundingbox.len() < 4 { return; }
+        
+        // Parse bounding box: [minlat, maxlat, minlon, maxlon]
+        let min_lat = location.boundingbox[0].parse::<f64>().unwrap_or(0.0);
+        let max_lat = location.boundingbox[1].parse::<f64>().unwrap_or(0.0);
+        let min_lon = location.boundingbox[2].parse::<f64>().unwrap_or(0.0);
+        let max_lon = location.boundingbox[3].parse::<f64>().unwrap_or(0.0);
+
+        let center_lat = (min_lat + max_lat) / 2.0;
+        let center_lon = (min_lon + max_lon) / 2.0;
+        
+        let lat_span = (max_lat - min_lat).abs().max(0.001);
+        let lon_span = (max_lon - min_lon).abs().max(0.001);
+
+        // Heuristic for zoom level
+        // At zoom 0, 360 degrees = 256 pixels.
+        // Assume a viewport of ~1000px.
+        // We want span * (256 * 2^Z / 360) < 800 (80% of viewport)
+        // 2^Z < (800 * 360) / (span * 256)
+        // Z < log2(1125 / span)
+        
+        let zoom_lat = (1125.0 / (lat_span * 2.0)).log2(); // lat span is more restricted
+        let zoom_lon = (1125.0 / lon_span).log2();
+        
+        let target_zoom = zoom_lat.min(zoom_lon).clamp(1.0, 19.0);
+
+        // Insert keyframes at current frame
+        if let Some(ch) = self.track.channels.get_mut("Position") {
+            ch.insert_keyframe(Keyframe {
+                frame: self.current_frame,
+                value: crate::animation::Value::Position(center_lon, center_lat),
+                interpolation: Interpolation::Linear,
+                flags: KeyframeFlags::NONE,
+            });
+        }
+
+        if let Some(ch) = self.track.channels.get_mut("Zoom") {
+            ch.insert_keyframe(Keyframe {
+                frame: self.current_frame,
+                value: crate::animation::Value::Float(target_zoom),
+                interpolation: Interpolation::Linear,
+                flags: KeyframeFlags::NONE,
+            });
+        }
+        
+        // Trigger a solve
+        self.last_evaluated_frame = None;
     }
 }
