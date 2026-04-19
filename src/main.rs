@@ -5,6 +5,7 @@ mod animation;
 mod engine;
 mod geocoding;
 mod map_plugin;
+mod project_manager;
 mod theme;
 mod timeline;
 mod transitions;
@@ -34,7 +35,12 @@ enum InspectorTab {
     Inspector,
 }
 
-struct MyApp {
+enum AppState {
+    ProjectManager,
+    Editor,
+}
+
+struct EditorState {
     map: MapEngine,
     graph_editor: GraphEditor,
     timeline: Timeline,
@@ -46,6 +52,14 @@ struct MyApp {
     selected_clip: Option<(usize, usize)>,
     inspector_tab: InspectorTab,
     selected_clip_channel: Option<String>, // "Alpha" or "Scale"
+}
+
+struct MyApp {
+    app_state: AppState,
+    project_manager: project_manager::ProjectManager,
+    editor: Option<EditorState>,
+    new_project_name: String,
+    show_new_project_dialog: bool,
 }
 
 impl MyApp {
@@ -64,7 +78,8 @@ impl MyApp {
 
         cc.egui_ctx.set_fonts(fonts);
         theme::apply(&cc.egui_ctx);
-        Self {
+
+        let editor_state = EditorState {
             map: MapEngine::new(cc),
             graph_editor: GraphEditor::new(),
             timeline: Timeline::new(),
@@ -76,33 +91,104 @@ impl MyApp {
             selected_clip: None,
             inspector_tab: InspectorTab::Camera,
             selected_clip_channel: None,
+        };
+
+        Self {
+            app_state: AppState::ProjectManager,
+            project_manager: project_manager::ProjectManager::new(),
+            editor: Some(editor_state),
+            new_project_name: String::new(),
+            show_new_project_dialog: false,
         }
     }
 }
 
 impl eframe::App for MyApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        match self.app_state {
+            AppState::ProjectManager => self.ui_project_manager(ui),
+            AppState::Editor => self.ui_editor(ui, _frame),
+        }
+    }
+}
+
+impl MyApp {
+    fn ui_project_manager(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            if let Some(action) = self.project_manager.ui(ui) {
+                match action {
+                    project_manager::ProjectAction::Open(project_idx) => {
+                        // Open selected project
+                        if let Ok(_path) = self.project_manager.open_project(project_idx) {
+                            self.app_state = AppState::Editor;
+                        }
+                    }
+                    project_manager::ProjectAction::NewProject => {
+                        self.show_new_project_dialog = true;
+                    }
+                }
+            }
+        });
+
+        // Handle new project dialog
+        if self.show_new_project_dialog {
+            let mut open = true;
+            egui::Window::new("New Project")
+                .open(&mut open)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Project Name:");
+                        ui.text_edit_singleline(&mut self.new_project_name);
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Create").clicked() && !self.new_project_name.is_empty() {
+                            if let Ok(_) =
+                                self.project_manager.create_project(&self.new_project_name)
+                            {
+                                self.new_project_name.clear();
+                                self.show_new_project_dialog = false;
+                                self.app_state = AppState::Editor;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.new_project_name.clear();
+                            self.show_new_project_dialog = false;
+                        }
+                    });
+                });
+            self.show_new_project_dialog = open;
+        }
+    }
+
+    fn ui_editor(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let editor = match &mut self.editor {
+            Some(e) => e,
+            None => return,
+        };
+
         let ctx = ui.ctx().clone();
 
         // --- 1. EVALUATION PHASE ---
         // Ensure the engine ticks and resolves all animations BEFORE any UI reads state.
-        self.map.update();
+        editor.map.update();
 
-        let dissolve = self
+        let dissolve = editor
             .map
             .parameter_cache
             .get("Dissolve")
             .map(|c| c.value.as_float())
             .unwrap_or(0.0);
 
-        let wipe = self
+        let wipe = editor
             .map
             .parameter_cache
             .get("Wipe")
             .map(|c| c.value.as_float())
             .unwrap_or(1.0);
 
-        let bearing = self
+        let bearing = editor
             .map
             .parameter_cache
             .get("Bearing")
@@ -110,11 +196,13 @@ impl eframe::App for MyApp {
             .unwrap_or(0.0);
 
         // Redraw loop for playback
-        if self.map.is_playing {
+        if editor.map.is_playing {
             ctx.request_repaint();
         }
 
-        egui::TopBottomPanel::top("menu_bar").show_inside(ui, |ui| {
+        // Menu bar - simplified to avoid borrow issues
+        let mut back_to_projects = false;
+        egui::Panel::top("menu_bar").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New").clicked() {
@@ -127,12 +215,29 @@ impl eframe::App for MyApp {
                     if ui.button("Save").clicked() {
                         ui.close();
                     }
+                    ui.separator();
+                    if ui.button("Back to Projects").clicked() {
+                        back_to_projects = true;
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
-                    ui.checkbox(&mut self.show_graph, "Graph Editor");
+                    ui.checkbox(&mut editor.show_graph, "Graph Editor");
                 });
             });
         });
+
+        // Handle navigation back to projects
+        if back_to_projects {
+            self.app_state = AppState::ProjectManager;
+            self.editor = None;
+            return;
+        }
+
+        let editor = match &mut self.editor {
+            Some(e) => e,
+            None => return,
+        };
 
         egui::SidePanel::left("media_pool")
             .resizable(true)
@@ -141,15 +246,18 @@ impl eframe::App for MyApp {
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.search_query);
+                    ui.text_edit_singleline(&mut editor.search_query);
                     if ui.button("Search").clicked()
-                        && !self.is_searching.load(std::sync::atomic::Ordering::Relaxed)
+                        && !editor
+                            .is_searching
+                            .load(std::sync::atomic::Ordering::Relaxed)
                     {
-                        self.is_searching
+                        editor
+                            .is_searching
                             .store(true, std::sync::atomic::Ordering::Relaxed);
-                        let query = self.search_query.clone();
-                        let results_arc = Arc::clone(&self.search_results);
-                        let searching_arc = Arc::clone(&self.is_searching);
+                        let query = editor.search_query.clone();
+                        let results_arc = Arc::clone(&editor.search_results);
+                        let searching_arc = Arc::clone(&editor.is_searching);
                         // egui::Context is Arc-backed — cheap to clone and Send
                         let ctx_clone = ctx.clone();
 
@@ -187,7 +295,10 @@ impl eframe::App for MyApp {
                     }
                 });
 
-                if self.is_searching.load(std::sync::atomic::Ordering::Relaxed) {
+                if editor
+                    .is_searching
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     ui.spinner();
                 } else {
                     // drag_to_scroll(false) is critical — otherwise the ScrollArea
@@ -195,9 +306,9 @@ impl eframe::App for MyApp {
                     egui::ScrollArea::vertical()
                         .drag_to_scroll(false)
                         .show(ui, |ui| {
-                            if let Ok(locked) = self.search_results.lock() {
+                            if let Ok(locked) = editor.search_results.lock() {
                                 for (_i, res) in locked.iter().enumerate() {
-                                    let is_dragging_this = self
+                                    let is_dragging_this = editor
                                         .dragging_location
                                         .as_ref()
                                         .map(|d| d.display_name == res.display_name)
@@ -229,7 +340,7 @@ impl eframe::App for MyApp {
                                     );
 
                                     if row_resp.dragged() {
-                                        self.dragging_location = Some(res.clone());
+                                        editor.dragging_location = Some(res.clone());
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                     }
 
@@ -261,38 +372,38 @@ impl eframe::App for MyApp {
             .show_inside(ui, |ui| {
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Camera, "Camera");
-                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Inspector, "Inspector");
+                    ui.selectable_value(&mut editor.inspector_tab, InspectorTab::Camera, "Camera");
+                    ui.selectable_value(&mut editor.inspector_tab, InspectorTab::Inspector, "Inspector");
                 });
                 ui.separator();
 
-                match self.inspector_tab {
+                match editor.inspector_tab {
                     InspectorTab::Camera => {
                         ui.label(egui::RichText::new("Camera Settings").strong());
                         ui.add_space(5.0);
 
-                        ui.label(format!("Frame: {}", self.map.current_frame));
+                        ui.label(format!("Frame: {}", editor.map.current_frame));
 
                         ui.separator();
                         ui.label("Map Viewport");
 
-                let current_zoom = self.map.zoom();
+                let current_zoom = editor.map.zoom();
                 let mut zoom_val = current_zoom;
 
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
                     let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed();
 
-                    if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
-                        let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
+                    if let Some(ch) = editor.map.track.channels.get_mut("Zoom") {
+                        let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
                         let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
 
                         if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                             if has_kf {
-                                ch.keyframes.retain(|k| k.frame != self.map.current_frame);
+                                ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
                             } else {
                                 ch.insert_keyframe(animation::Keyframe {
-                                    frame: self.map.current_frame,
+                                    frame: editor.map.current_frame,
                                     value: animation::Value::Float(zoom_val),
                                     interpolation: animation::Interpolation::Linear,
                                     flags: animation::KeyframeFlags::NONE,
@@ -303,7 +414,7 @@ impl eframe::App for MyApp {
 
                         if changed {
                             ch.insert_keyframe(animation::Keyframe {
-                                frame: self.map.current_frame,
+                                frame: editor.map.current_frame,
                                 value: animation::Value::Float(zoom_val),
                                 interpolation: animation::Interpolation::Linear,
                                 flags: animation::KeyframeFlags::NONE,
@@ -312,7 +423,7 @@ impl eframe::App for MyApp {
                     }
                 });
 
-                let current_pos = self.map.parameter_cache.get("Position")
+                let current_pos = editor.map.parameter_cache.get("Position")
                     .map(|c| c.value.clone())
                     .unwrap_or(animation::Value::Position(0.0, 20.0));
 
@@ -322,16 +433,16 @@ impl eframe::App for MyApp {
                         ui.label("Pos X:");
                         let changed = ui.add(egui::DragValue::new(&mut lon).speed(0.1)).changed();
 
-                        if let Some(ch) = self.map.track.channels.get_mut("Position") {
-                            let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
+                        if let Some(ch) = editor.map.track.channels.get_mut("Position") {
+                            let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
                             let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
 
                             if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                                 if has_kf {
-                                    ch.keyframes.retain(|k| k.frame != self.map.current_frame);
+                                    ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
                                 } else {
                                     ch.insert_keyframe(animation::Keyframe {
-                                        frame: self.map.current_frame,
+                                        frame: editor.map.current_frame,
                                         value: animation::Value::Position(lon, lat),
                                         interpolation: animation::Interpolation::Linear,
                                         flags: animation::KeyframeFlags::NONE,
@@ -342,7 +453,7 @@ impl eframe::App for MyApp {
 
                             if changed {
                                 ch.insert_keyframe(animation::Keyframe {
-                                    frame: self.map.current_frame,
+                                    frame: editor.map.current_frame,
                                     value: animation::Value::Position(lon, lat),
                                     interpolation: animation::Interpolation::Linear,
                                     flags: animation::KeyframeFlags::NONE,
@@ -356,16 +467,16 @@ impl eframe::App for MyApp {
                         ui.label("Pos Y:");
                         let changed = ui.add(egui::DragValue::new(&mut lat).speed(0.1)).changed();
 
-                        if let Some(ch) = self.map.track.channels.get_mut("Position") {
-                            let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
+                        if let Some(ch) = editor.map.track.channels.get_mut("Position") {
+                            let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
                             let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
 
                             if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
                                 if has_kf {
-                                    ch.keyframes.retain(|k| k.frame != self.map.current_frame);
+                                    ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
                                 } else {
                                     ch.insert_keyframe(animation::Keyframe {
-                                        frame: self.map.current_frame,
+                                        frame: editor.map.current_frame,
                                         value: animation::Value::Position(lon, lat),
                                         interpolation: animation::Interpolation::Linear,
                                         flags: animation::KeyframeFlags::NONE,
@@ -376,7 +487,7 @@ impl eframe::App for MyApp {
 
                             if changed {
                                 ch.insert_keyframe(animation::Keyframe {
-                                    frame: self.map.current_frame,
+                                    frame: editor.map.current_frame,
                                     value: animation::Value::Position(lon, lat),
                                     interpolation: animation::Interpolation::Linear,
                                     flags: animation::KeyframeFlags::NONE,
@@ -395,11 +506,11 @@ impl eframe::App for MyApp {
                         ui.label(egui::RichText::new("Clip Properties").strong());
                         ui.add_space(5.0);
 
-                        if let Some((track_idx, clip_idx)) = self.selected_clip {
+                        if let Some((track_idx, clip_idx)) = editor.selected_clip {
                             let mut snap_loc = None;
                             let mut delete_requested = false;
 
-                            if let Some(obj_track) = self.map.track.object_tracks.get_mut(track_idx) {
+                            if let Some(obj_track) = editor.map.track.object_tracks.get_mut(track_idx) {
                                 if let Some(clip) = obj_track.clips.get_mut(clip_idx) {
                                     ui.group(|ui| {
                                         ui.label(format!("Type: Location"));
@@ -485,12 +596,12 @@ impl eframe::App for MyApp {
                                         ui.label("Edit in Graph:");
                                         ui.horizontal(|ui| {
                                             for ch_name in ["Alpha", "Scale"] {
-                                                let active = self.selected_clip_channel.as_deref() == Some(ch_name);
+                                                let active = editor.selected_clip_channel.as_deref() == Some(ch_name);
                                                 if ui.selectable_label(active, ch_name).clicked() {
-                                                    self.selected_clip_channel = if active {
+                                                    editor.selected_clip_channel = if active {
                                                         None
                                                     } else {
-                                                        self.show_graph = true;
+                                                        editor.show_graph = true;
                                                         Some(ch_name.to_string())
                                                     };
                                                 }
@@ -508,14 +619,14 @@ impl eframe::App for MyApp {
                                 }
                             }
 
-                            // Perform actions that need &mut self.map after the borrow ends
+                            // Perform actions that need &mut editor.map after the borrow ends
                             if let Some(loc) = snap_loc {
-                                self.map.fit_to_location(&loc);
+                                editor.map.fit_to_location(&loc);
                             }
                             if delete_requested {
-                                if let Some(track) = self.map.track.object_tracks.get_mut(track_idx) {
+                                if let Some(track) = editor.map.track.object_tracks.get_mut(track_idx) {
                                     track.clips.remove(clip_idx);
-                                    self.selected_clip = None;
+                                    editor.selected_clip = None;
                                 }
                             }
                         } else {
@@ -536,49 +647,49 @@ impl eframe::App for MyApp {
                 ui.horizontal(|ui| {
                     // Playback Transport Controls
                     if ui.button("⏮").on_hover_text("Go to Start").clicked() {
-                        self.map.current_frame = 0;
-                        self.map.is_playing = false;
+                        editor.map.current_frame = 0;
+                        editor.map.is_playing = false;
                     }
 
                     if ui.button("◄").on_hover_text("Previous Frame").clicked() {
-                        if self.map.current_frame > 0 {
-                            self.map.current_frame -= 1;
+                        if editor.map.current_frame > 0 {
+                            editor.map.current_frame -= 1;
                         }
-                        self.map.is_playing = false;
+                        editor.map.is_playing = false;
                     }
 
-                    let play_icon = if self.map.is_playing { "⏸" } else { "▶" };
+                    let play_icon = if editor.map.is_playing { "⏸" } else { "▶" };
                     if ui.button(play_icon).on_hover_text("Play/Pause").clicked() {
-                        self.map.is_playing = !self.map.is_playing;
+                        editor.map.is_playing = !editor.map.is_playing;
                     }
 
                     if ui.button("►").on_hover_text("Next Frame").clicked() {
-                        if self.map.current_frame < 1800 {
-                            self.map.current_frame += 1;
+                        if editor.map.current_frame < 1800 {
+                            editor.map.current_frame += 1;
                         }
-                        self.map.is_playing = false;
+                        editor.map.is_playing = false;
                     }
 
                     if ui.button("⏭").on_hover_text("Go to End").clicked() {
-                        self.map.current_frame = 1800; // Based on timeline max
-                        self.map.is_playing = false;
+                        editor.map.current_frame = 1800; // Based on timeline max
+                        editor.map.is_playing = false;
                     }
 
                     ui.add_space(20.0);
                     ui.label(
-                        egui::RichText::new(format!("Frame: {:04}", self.map.current_frame))
+                        egui::RichText::new(format!("Frame: {:04}", editor.map.current_frame))
                             .monospace(),
                     );
                 });
 
                 ui.separator();
 
-                if self.show_graph {
+                if editor.show_graph {
                     // Try to show a clip channel first, fall back to map Zoom
                     let drawn = if let (Some((ti, ci)), Some(ch_name)) =
-                        (self.selected_clip, &self.selected_clip_channel)
+                        (editor.selected_clip, &editor.selected_clip_channel)
                     {
-                        if let Some(ch) = self
+                        if let Some(ch) = editor
                             .map
                             .track
                             .object_tracks
@@ -586,7 +697,7 @@ impl eframe::App for MyApp {
                             .and_then(|t| t.clips.get_mut(ci))
                             .and_then(|clip| clip.channels.get_mut(ch_name))
                         {
-                            self.graph_editor.ui(ui, ch);
+                            editor.graph_editor.ui(ui, ch);
                             true
                         } else {
                             false
@@ -596,29 +707,29 @@ impl eframe::App for MyApp {
                     };
 
                     if !drawn {
-                        if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
-                            self.graph_editor.ui(ui, ch);
+                        if let Some(ch) = editor.map.track.channels.get_mut("Zoom") {
+                            editor.graph_editor.ui(ui, ch);
                         }
                     }
                 } else {
-                    let old_sel = self.selected_clip;
-                    let dropped = self.timeline.ui(
+                    let old_sel = editor.selected_clip;
+                    let dropped = editor.timeline.ui(
                         ui,
-                        &mut self.map,
-                        &self.dragging_location,
-                        &mut self.selected_clip,
+                        &mut editor.map,
+                        &editor.dragging_location,
+                        &mut editor.selected_clip,
                     );
-                    if self.selected_clip != old_sel && self.selected_clip.is_some() {
-                        self.inspector_tab = InspectorTab::Inspector;
+                    if editor.selected_clip != old_sel && editor.selected_clip.is_some() {
+                        editor.inspector_tab = InspectorTab::Inspector;
                     }
 
                     let pointer_up = ui.input(|i| !i.pointer.any_down());
                     if dropped {
                         // Successful drop into timeline
-                        self.dragging_location = None;
-                    } else if self.dragging_location.is_some() && pointer_up {
+                        editor.dragging_location = None;
+                    } else if editor.dragging_location.is_some() && pointer_up {
                         // Mouse released outside timeline — cancel the drag
-                        self.dragging_location = None;
+                        editor.dragging_location = None;
                     }
                 }
             });
@@ -633,7 +744,7 @@ impl eframe::App for MyApp {
             );
 
             ui.set_clip_rect(wipe_rect);
-            self.map.ui(ui);
+            editor.map.ui(ui);
 
             // Compass / Bearing Visualization
             let compass_pos = rect.right_top() + egui::vec2(-60.0, 60.0);
