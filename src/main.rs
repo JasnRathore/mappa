@@ -5,6 +5,7 @@ mod animation;
 mod engine;
 mod geocoding;
 mod map_plugin;
+mod theme;
 mod timeline;
 mod transitions;
 mod ui_graph;
@@ -62,6 +63,7 @@ impl MyApp {
             .push("dm_sans".to_owned());
 
         cc.egui_ctx.set_fonts(fonts);
+        theme::apply(&cc.egui_ctx);
         Self {
             map: MapEngine::new(cc),
             graph_editor: GraphEditor::new(),
