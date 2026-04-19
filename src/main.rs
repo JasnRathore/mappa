@@ -559,7 +559,7 @@ impl MyApp {
                                         ui.label(egui::RichText::new("Transition In").strong());
                                         egui::ComboBox::from_id_salt("tx_in")
                                             .width(ui.available_width())
-                                            .selected_text("Select...")
+                                            .selected_text(format!("{:?}", clip.transition_in))
                                             .show_ui(ui, |ui| {
                                                 for (label, preset) in [
                                                     ("None",       ClipPreset::None),
@@ -568,7 +568,10 @@ impl MyApp {
                                                     ("Bounce",     ClipPreset::BounceIn),
                                                     ("Grow-Fade",  ClipPreset::GrowFade),
                                                 ] {
-                                                    if ui.selectable_label(false, label).clicked() {
+                                                    let selected = clip.transition_in == preset;
+
+                                                    if ui.selectable_label(selected, label).clicked() {
+                                                        clip.transition_in = preset;
                                                         apply_clip_preset(clip, preset, 20);
                                                     }
                                                 }
@@ -578,7 +581,13 @@ impl MyApp {
                                         ui.label(egui::RichText::new("Transition Out").strong());
                                         egui::ComboBox::from_id_salt("tx_out")
                                             .width(ui.available_width())
-                                            .selected_text("Select...")
+                                            .selected_text(match clip.transition_out {
+                                                ClipPreset::None => "None",
+                                                ClipPreset::FadeOut => "Fade",
+                                                ClipPreset::PopOut => "Pop",
+                                                ClipPreset::GrowFade => "Grow-Fade",
+                                                _ => "Select...",
+                                            })
                                             .show_ui(ui, |ui| {
                                                 for (label, preset) in [
                                                     ("None",       ClipPreset::None),
@@ -586,7 +595,10 @@ impl MyApp {
                                                     ("Pop",        ClipPreset::PopOut),
                                                     ("Grow-Fade",  ClipPreset::GrowFade),
                                                 ] {
-                                                    if ui.selectable_label(false, label).clicked() {
+                                                    let selected = clip.transition_out == preset;
+
+                                                    if ui.selectable_label(selected, label).clicked() {
+                                                        clip.transition_out = preset;   // ✅ store selection
                                                         apply_clip_preset(clip, preset, 20);
                                                     }
                                                 }

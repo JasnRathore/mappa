@@ -140,6 +140,8 @@ pub struct Clip {
     pub location: crate::geocoding::LocationResult,
     pub color: [u8; 4],
     pub channels: HashMap<String, Channel>, // "Alpha", "Scale"
+    pub transition_in: ClipPreset,
+    pub transition_out: ClipPreset,
 }
 impl Clip {
     pub fn new(
@@ -177,6 +179,8 @@ impl Clip {
             location,
             color: [255, 140, 0, 100],
             channels,
+            transition_in: ClipPreset::None,
+            transition_out: ClipPreset::None,
         }
     }
 
