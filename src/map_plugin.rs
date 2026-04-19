@@ -5,6 +5,7 @@ use crate::animation::Track;
 pub struct MapHighlightPlugin<'a> {
     pub current_frame: u32,
     pub track: &'a Track,
+    pub triangulation_cache: &'a mut std::collections::HashMap<String, Vec<usize>>,
 }
 
 impl<'a> Plugin for MapHighlightPlugin<'a> {
@@ -14,14 +15,19 @@ impl<'a> Plugin for MapHighlightPlugin<'a> {
 
         // Scale stroke width with zoom: thinner when zoomed out, thicker when zoomed in
         let outline_width = (1.0 + zoom * 0.2).clamp(1.5, 5.0);
-        let outline = Stroke::new(outline_width, Color32::from_rgb(255, 140, 0));
 
         for obj_track in &self.track.object_tracks {
             for clip in &obj_track.clips {
                 if self.current_frame < clip.start_frame || self.current_frame > clip.end_frame {
                     continue;
                 }
-                draw_location(painter, projector, &clip.location, outline);
+                
+                let [r, g, b, a] = clip.color;
+                let fill_color = Color32::from_rgba_unmultiplied(r, g, b, a);
+                let stroke_color = Color32::from_rgba_unmultiplied(r, g, b, 255); // Opaque stroke
+                let outline = Stroke::new(outline_width, stroke_color);
+                
+                draw_location(painter, projector, self.triangulation_cache, &clip.location, fill_color, outline);
             }
         }
     }
@@ -30,7 +36,9 @@ impl<'a> Plugin for MapHighlightPlugin<'a> {
 fn draw_location(
     painter: &egui::Painter,
     projector: &Projector,
+    cache: &mut std::collections::HashMap<String, Vec<usize>>,
     loc: &crate::geocoding::LocationResult,
+    fill: Color32,
     outline: Stroke,
 ) {
     let Some(geojson) = &loc.geojson else { return };
@@ -39,18 +47,15 @@ fn draw_location(
     match type_str {
         "Polygon" => {
             if let Some(coords) = geojson.get("coordinates").and_then(|c| c.as_array()) {
-                if let Some(ring) = coords.first() {
-                    draw_ring_outline(painter, projector, ring, outline);
-                }
+                draw_polygon(painter, projector, cache, &loc.display_name, coords, fill, outline);
             }
         }
         "MultiPolygon" => {
             if let Some(polys) = geojson.get("coordinates").and_then(|c| c.as_array()) {
-                for poly in polys {
-                    if let Some(rings) = poly.as_array() {
-                        if let Some(ring) = rings.first() {
-                            draw_ring_outline(painter, projector, ring, outline);
-                        }
+                for (i, poly) in polys.iter().enumerate() {
+                    if let Some(coords) = poly.as_array() {
+                        let key = format!("{}_{}", loc.display_name, i);
+                        draw_polygon(painter, projector, cache, &key, coords, fill, outline);
                     }
                 }
             }
@@ -59,56 +64,76 @@ fn draw_location(
     }
 }
 
-fn draw_ring_outline(
+fn draw_polygon(
     painter: &egui::Painter,
     projector: &Projector,
-    ring: &serde_json::Value,
+    cache: &mut std::collections::HashMap<String, Vec<usize>>,
+    cache_key: &str,
+    rings: &Vec<serde_json::Value>,
+    fill: Color32,
     outline: Stroke,
 ) {
-    let Some(pts) = ring.as_array() else { return };
-    if pts.len() < 3 { return; }
+    if rings.is_empty() { return; }
 
-    // Project ALL points first, then simplify by screen-space distance.
-    // This avoids the squiggly artifact caused by step_by skipping important detail points.
-    let all_screen: Vec<Pos2> = pts.iter().filter_map(|pt| {
-        let c = pt.as_array()?;
-        if c.len() < 2 { return None; }
-        let lon = c[0].as_f64()?;
-        let lat = c[1].as_f64()?;
-        let px = projector.project(walkers::Position::new(lon, lat));
-        Some(Pos2::new(px.x as f32, px.y as f32))
-    }).collect();
+    let mut projected_rings: Vec<Vec<Pos2>> = Vec::new();
+    for ring in rings {
+        let Some(pts) = ring.as_array() else { continue };
+        if pts.len() < 3 { continue; }
 
-    if all_screen.len() < 2 { return; }
+        let projected: Vec<Pos2> = pts.iter().filter_map(|pt| {
+            let c = pt.as_array()?;
+            if c.len() < 2 { return None; }
+            let lon = c[0].as_f64()?;
+            let lat = c[1].as_f64()?;
+            let px = projector.project(walkers::Position::new(lon, lat));
+            Some(Pos2::new(px.x as f32, px.y as f32))
+        }).collect();
 
-    // Douglas-Peucker-like simplification: skip points that are within
-    // min_dist pixels of the previous kept point. This preserves detail
-    // at high zoom while reducing draw calls at low zoom.
-    let min_dist_sq: f32 = 4.0; // 2px minimum distance between kept points
-    let mut simplified: Vec<Pos2> = Vec::with_capacity(all_screen.len() / 2);
-    simplified.push(all_screen[0]);
-
-    for i in 1..all_screen.len() {
-        let last = *simplified.last().unwrap();
-        let cur = all_screen[i];
-        let dx = cur.x - last.x;
-        let dy = cur.y - last.y;
-        if dx * dx + dy * dy >= min_dist_sq {
-            simplified.push(cur);
+        if projected.len() >= 3 {
+            projected_rings.push(projected);
         }
     }
 
-    // Always include the last point to close the ring properly
-    if simplified.len() >= 2 && *simplified.last().unwrap() != *all_screen.last().unwrap() {
-        simplified.push(*all_screen.last().unwrap());
+    if projected_rings.is_empty() { return; }
+
+    // 1. Triangulation for Fill
+    let mut mesh = egui::Mesh::default();
+    let mut flat_vertices = Vec::new();
+    let mut hole_indices = Vec::new();
+    let mut current_index = 0;
+
+    for (i, ring) in projected_rings.iter().enumerate() {
+        if i > 0 {
+            hole_indices.push(current_index);
+        }
+        for &p in ring {
+            flat_vertices.push(p.x as f64);
+            flat_vertices.push(p.y as f64);
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: p,
+                uv: Pos2::ZERO,
+                color: fill.into(),
+            });
+            current_index += 1;
+        }
     }
 
-    if simplified.len() < 2 { return; }
+    if let Some(indices) = cache.get(cache_key) {
+        mesh.indices = indices.iter().map(|&i| i as u32).collect();
+        painter.add(egui::Shape::mesh(mesh));
+    } else if let Ok(indices) = earcutr::earcut(&flat_vertices, &hole_indices, 2) {
+        mesh.indices = indices.iter().map(|&i| i as u32).collect();
+        cache.insert(cache_key.to_string(), indices);
+        painter.add(egui::Shape::mesh(mesh));
+    }
 
-    // Draw each segment
-    for i in 0..simplified.len() {
-        let a = simplified[i];
-        let b = simplified[(i + 1) % simplified.len()];
-        painter.line_segment([a, b], outline);
+    // 2. Outlines (Draw AFTER fill to keep sharp)
+    for (i, ring) in projected_rings.iter().enumerate() {
+        painter.add(egui::Shape::Path(egui::epaint::PathShape {
+            points: ring.clone(),
+            closed: true,
+            fill: Color32::TRANSPARENT,
+            stroke: outline.into(),
+        }));
     }
 }

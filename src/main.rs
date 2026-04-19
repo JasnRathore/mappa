@@ -24,7 +24,7 @@ fn main() -> Result<(), eframe::Error> {
 }
 
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 #[derive(PartialEq, Clone, Copy)]
 enum InspectorTab {
@@ -341,8 +341,33 @@ impl eframe::App for MyApp {
                                         ui.label(format!("End: {}f", clip.end_frame));
                                     });
 
-                                    ui.add_space(10.0);
-                                    if ui.button("🚀 Snap to Fit").clicked() {
+                                        ui.add_space(10.0);
+                                        ui.label("Highlight Color");
+                                        ui.horizontal(|ui| {
+                                            let mut color = egui::Color32::from_rgba_unmultiplied(
+                                                clip.color[0], clip.color[1], clip.color[2], clip.color[3]
+                                            );
+                                            if ui.color_edit_button_srgba(&mut color).changed() {
+                                                clip.color = color.to_array();
+                                            }
+
+                                            // Presets
+                                            let presets = [
+                                                ("🟠", [255, 140, 0, 100]),
+                                                ("🔵", [0, 120, 255, 100]),
+                                                ("🔴", [255, 50, 50, 100]),
+                                                ("🟢", [50, 200, 50, 100]),
+                                            ];
+
+                                            for (icon, rgba) in presets {
+                                                if ui.button(icon).clicked() {
+                                                    clip.color = rgba;
+                                                }
+                                            }
+                                        });
+
+                                        ui.add_space(10.0);
+                                        if ui.button("🚀 Snap to Fit").clicked() {
                                         snap_loc = Some(clip.location.clone());
                                     }
                                     

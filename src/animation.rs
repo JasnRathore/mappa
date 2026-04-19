@@ -134,6 +134,7 @@ pub struct Clip {
     pub start_frame: u32,
     pub end_frame: u32,
     pub location: crate::geocoding::LocationResult,
+    pub color: [u8; 4],
 }
 
 pub struct ObjectTrack {

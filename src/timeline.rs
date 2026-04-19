@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Stroke, Vec2};
-use crate::animation::{Channel, KeyframeFlags, Track, Value};
+use crate::animation::Channel;
 use crate::engine::MapEngine;
 
 pub struct Timeline {
@@ -140,6 +140,7 @@ impl Timeline {
                             start_frame: frame,
                             end_frame: frame + 90,
                             location: loc.clone(),
+                            color: [255, 140, 0, 100], // Default: Semi-transparent Orange
                         };
 
                         // Determine which object track to drop into (or create a new one)
@@ -278,6 +279,15 @@ impl Timeline {
             let stroke_width = if is_selected { 2.0 } else { 1.0 };
             
             painter.rect_stroke(clip_rect, 2.0, Stroke::new(stroke_width, stroke_color), eframe::egui::StrokeKind::Middle);
+
+            // Color Strip at bottom
+            let strip_height = 2.0;
+            let strip_rect = Rect::from_min_max(
+                Pos2::new(clip_rect.left(), clip_rect.bottom() - strip_height),
+                clip_rect.max
+            );
+            let [r, g, b, _a] = clip.color;
+            painter.rect_filled(strip_rect, 0.0, Color32::from_rgba_unmultiplied(r, g, b, 255)); // Full alpha for strip
 
             // Label
             painter.text(
