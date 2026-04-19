@@ -34,8 +34,13 @@ impl<'a> Plugin for MapHighlightPlugin<'a> {
                 }
 
                 let [r, g, b, a] = clip.color;
-                let fill_color = Color32::from_rgba_unmultiplied(r, g, b, a);
-                let stroke_color = Color32::from_rgba_unmultiplied(r, g, b, 255);
+                let alpha = clip.get_param("Alpha", self.current_frame) as f32;
+                let scale = clip.get_param("Scale", self.current_frame) as f32;
+
+                let fill_alpha = (a as f32 * alpha).clamp(0.0, 255.0) as u8;
+                let stroke_alpha = (255.0_f32 * alpha).clamp(0.0, 255.0) as u8;
+                let fill_color = Color32::from_rgba_unmultiplied(r, g, b, fill_alpha);
+                let stroke_color = Color32::from_rgba_unmultiplied(r, g, b, stroke_alpha);
                 let outline = Stroke::new(outline_width, stroke_color);
 
                 if let Some(prepared) = &clip.location.prepared_geometry {
@@ -47,6 +52,7 @@ impl<'a> Plugin for MapHighlightPlugin<'a> {
                             fill_color,
                             outline,
                             scanline_step,
+                            scale,
                         );
                     }
                 }
@@ -69,15 +75,22 @@ fn draw_prepared_polygon(
     fill: Color32,
     outline: Stroke,
     scanline_step: f32,
+    scale: f32,
 ) {
     let projected = project_polygon(projector, poly);
 
-    // NEW: skip polygons that are invisible at the current zoom level
     if let Some(bounds) = projected.bounds {
         if bounds.width() < 2.0 && bounds.height() < 2.0 {
             return;
         }
     }
+
+    // Apply scale around the centroid of the bounding box
+    let projected = if (scale - 1.0).abs() > 0.001 {
+        scale_projected(projected, scale)
+    } else {
+        projected
+    };
 
     if !projected.fill_rings.is_empty() {
         draw_scanline_fill(
@@ -101,6 +114,28 @@ fn draw_prepared_polygon(
             stroke: outline.into(),
         }));
     }
+}
+
+fn scale_projected(mut proj: ProjectedPolygon, scale: f32) -> ProjectedPolygon {
+    let center = match proj.bounds {
+        Some(b) => b.center(),
+        None => return proj,
+    };
+
+    let scale_ring = |ring: Vec<Pos2>| -> Vec<Pos2> {
+        ring.into_iter()
+            .map(|p| center + (p - center) * scale)
+            .collect()
+    };
+
+    proj.fill_rings = proj.fill_rings.into_iter().map(scale_ring).collect();
+    proj.outline_segments = proj.outline_segments.into_iter().map(scale_ring).collect();
+    // Recompute bounds
+    proj.bounds = None;
+    for ring in &proj.fill_rings {
+        extend_bounds(&mut proj.bounds, ring);
+    }
+    proj
 }
 
 fn project_polygon(projector: &Projector, poly: &PreparedPolygon) -> ProjectedPolygon {

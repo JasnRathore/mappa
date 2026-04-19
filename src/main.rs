@@ -9,6 +9,7 @@ mod timeline;
 mod transitions;
 mod ui_graph;
 
+use crate::animation::{ClipPreset, apply_clip_preset};
 use engine::MapEngine;
 use timeline::Timeline;
 use ui_graph::GraphEditor;
@@ -43,6 +44,7 @@ struct MyApp {
     dragging_location: Option<crate::geocoding::LocationResult>,
     selected_clip: Option<(usize, usize)>,
     inspector_tab: InspectorTab,
+    selected_clip_channel: Option<String>, // "Alpha" or "Scale"
 }
 
 impl MyApp {
@@ -58,6 +60,7 @@ impl MyApp {
             dragging_location: None,
             selected_clip: None,
             inspector_tab: InspectorTab::Camera,
+            selected_clip_channel: None,
         }
     }
 }
@@ -418,7 +421,42 @@ impl eframe::App for MyApp {
                                                 }
                                             }
                                         });
+                                        ui.add_space(10.0);
+                                        ui.label(egui::RichText::new("Transition Preset").strong());
 
+                                        let presets = [
+                                            ("None",       ClipPreset::None),
+                                            ("Fade In",    ClipPreset::FadeIn),
+                                            ("Fade Out",   ClipPreset::FadeOut),
+                                            ("Fade In/Out",ClipPreset::FadeInOut),
+                                            ("Pop In",     ClipPreset::PopIn),
+                                            ("Pop Out",    ClipPreset::PopOut),
+                                            ("Bounce In",  ClipPreset::BounceIn),
+                                            ("Grow + Fade",ClipPreset::GrowFade),
+                                        ];
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (label, preset) in presets {
+                                                if ui.small_button(label).clicked() {
+                                                    crate::animation::apply_clip_preset(clip, preset, 20); // 20f default
+                                                }
+                                            }
+                                        });
+
+                                        ui.add_space(6.0);
+                                        ui.label("Edit in Graph:");
+                                        ui.horizontal(|ui| {
+                                            for ch_name in ["Alpha", "Scale"] {
+                                                let active = self.selected_clip_channel.as_deref() == Some(ch_name);
+                                                if ui.selectable_label(active, ch_name).clicked() {
+                                                    self.selected_clip_channel = if active {
+                                                        None
+                                                    } else {
+                                                        self.show_graph = true;
+                                                        Some(ch_name.to_string())
+                                                    };
+                                                }
+                                            }
+                                        });
                                         ui.add_space(10.0);
                                         if ui.button("🚀 Snap to Fit").clicked() {
                                         snap_loc = Some(clip.location.clone());
@@ -497,8 +535,31 @@ impl eframe::App for MyApp {
                 ui.separator();
 
                 if self.show_graph {
-                    if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
-                        self.graph_editor.ui(ui, ch);
+                    // Try to show a clip channel first, fall back to map Zoom
+                    let drawn = if let (Some((ti, ci)), Some(ch_name)) =
+                        (self.selected_clip, &self.selected_clip_channel)
+                    {
+                        if let Some(ch) = self
+                            .map
+                            .track
+                            .object_tracks
+                            .get_mut(ti)
+                            .and_then(|t| t.clips.get_mut(ci))
+                            .and_then(|clip| clip.channels.get_mut(ch_name))
+                        {
+                            self.graph_editor.ui(ui, ch);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !drawn {
+                        if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
+                            self.graph_editor.ui(ui, ch);
+                        }
                     }
                 } else {
                     let old_sel = self.selected_clip;

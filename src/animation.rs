@@ -47,7 +47,7 @@ pub enum Interpolation {
     Linear,
     Step,
     Bezier {
-        handle_in: (f64, f64),  // (frame_delta, value_delta)
+        handle_in: (f64, f64), // (frame_delta, value_delta)
         handle_out: (f64, f64),
         handle_type: HandleType,
     },
@@ -82,8 +82,12 @@ impl Channel {
 
     pub fn insert_keyframe(&mut self, mut keyframe: Keyframe) {
         self.dirty = true;
-        if let Some(pos) = self.keyframes.iter().position(|k| k.frame == keyframe.frame) {
-            // Preserve flags if not explicitly set? 
+        if let Some(pos) = self
+            .keyframes
+            .iter()
+            .position(|k| k.frame == keyframe.frame)
+        {
+            // Preserve flags if not explicitly set?
             // For now just replace
             self.keyframes[pos] = keyframe;
         } else {
@@ -135,6 +139,167 @@ pub struct Clip {
     pub end_frame: u32,
     pub location: crate::geocoding::LocationResult,
     pub color: [u8; 4],
+    pub channels: HashMap<String, Channel>, // "Alpha", "Scale"
+}
+impl Clip {
+    pub fn new(
+        name: &str,
+        start_frame: u32,
+        end_frame: u32,
+        location: crate::geocoding::LocationResult,
+    ) -> Self {
+        let mut channels = HashMap::new();
+
+        // Alpha: 1.0 throughout by default
+        let mut alpha = Channel::new("Alpha");
+        alpha.insert_keyframe(Keyframe {
+            frame: 0,
+            value: Value::Float(1.0),
+            interpolation: Interpolation::Linear,
+            flags: KeyframeFlags::NONE,
+        });
+        channels.insert("Alpha".to_string(), alpha);
+
+        // Scale: 1.0 throughout by default
+        let mut scale = Channel::new("Scale");
+        scale.insert_keyframe(Keyframe {
+            frame: 0,
+            value: Value::Float(1.0),
+            interpolation: Interpolation::Linear,
+            flags: KeyframeFlags::NONE,
+        });
+        channels.insert("Scale".to_string(), scale);
+
+        Self {
+            name: name.to_string(),
+            start_frame,
+            end_frame,
+            location,
+            color: [255, 140, 0, 100],
+            channels,
+        }
+    }
+
+    /// Frame is absolute; internally converted to relative for channel lookup
+    pub fn get_param(&self, name: &str, abs_frame: u32) -> f64 {
+        let rel = abs_frame.saturating_sub(self.start_frame);
+        self.channels
+            .get(name)
+            .map(|ch| ch.get_value_at(rel).as_float())
+            .unwrap_or(1.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipPreset {
+    None,
+    FadeIn,
+    FadeOut,
+    FadeInOut,
+    PopIn,    // scale 0 → 1, ease-out
+    PopOut,   // scale 1 → 0, ease-in
+    BounceIn, // scale 0 → 1.15 → 1.0
+    GrowFade, // scale + alpha together
+}
+
+pub fn apply_clip_preset(clip: &mut Clip, preset: ClipPreset, duration: u32) {
+    let dur = duration.max(1);
+    let clip_len = clip.end_frame.saturating_sub(clip.start_frame);
+
+    match preset {
+        ClipPreset::None => {
+            set_flat(clip, "Alpha", 1.0);
+            set_flat(clip, "Scale", 1.0);
+        }
+
+        ClipPreset::FadeIn => {
+            set_ramp(clip, "Alpha", 0.0, 1.0, dur, Interpolation::EaseInOut);
+            set_flat(clip, "Scale", 1.0);
+        }
+
+        ClipPreset::FadeOut => {
+            let start = clip_len.saturating_sub(dur);
+            set_flat(clip, "Alpha", 1.0);
+            let ch = clip.channels.get_mut("Alpha").unwrap();
+            ch.keyframes.clear();
+            ch.insert_keyframe(kf(start, 1.0, Interpolation::EaseInOut));
+            ch.insert_keyframe(kf(clip_len, 0.0, Interpolation::Linear));
+            set_flat(clip, "Scale", 1.0);
+        }
+
+        ClipPreset::FadeInOut => {
+            let out_start = clip_len.saturating_sub(dur);
+            let ch = clip
+                .channels
+                .entry("Alpha".into())
+                .or_insert_with(|| Channel::new("Alpha"));
+            ch.keyframes.clear();
+            ch.insert_keyframe(kf(0, 0.0, Interpolation::EaseInOut));
+            ch.insert_keyframe(kf(dur, 1.0, Interpolation::Linear));
+            ch.insert_keyframe(kf(out_start, 1.0, Interpolation::EaseInOut));
+            ch.insert_keyframe(kf(clip_len, 0.0, Interpolation::Linear));
+            set_flat(clip, "Scale", 1.0);
+        }
+
+        ClipPreset::PopIn => {
+            set_flat(clip, "Alpha", 1.0);
+            set_ramp(clip, "Scale", 0.0, 1.0, dur, Interpolation::EaseOut);
+        }
+
+        ClipPreset::PopOut => {
+            set_flat(clip, "Alpha", 1.0);
+            let start = clip_len.saturating_sub(dur);
+            let ch = clip.channels.get_mut("Scale").unwrap();
+            ch.keyframes.clear();
+            ch.insert_keyframe(kf(start, 1.0, Interpolation::EaseIn));
+            ch.insert_keyframe(kf(clip_len, 0.0, Interpolation::Linear));
+        }
+
+        ClipPreset::BounceIn => {
+            set_flat(clip, "Alpha", 1.0);
+            let ch = clip
+                .channels
+                .entry("Scale".into())
+                .or_insert_with(|| Channel::new("Scale"));
+            ch.keyframes.clear();
+            ch.insert_keyframe(kf(0, 0.0, Interpolation::EaseOut));
+            ch.insert_keyframe(kf(dur * 3 / 4, 1.15, Interpolation::EaseInOut));
+            ch.insert_keyframe(kf(dur, 1.0, Interpolation::Linear));
+        }
+
+        ClipPreset::GrowFade => {
+            set_ramp(clip, "Alpha", 0.0, 1.0, dur, Interpolation::EaseInOut);
+            set_ramp(clip, "Scale", 0.0, 1.0, dur, Interpolation::EaseOut);
+        }
+    }
+}
+
+fn kf(frame: u32, val: f64, interp: Interpolation) -> Keyframe {
+    Keyframe {
+        frame,
+        value: Value::Float(val),
+        interpolation: interp,
+        flags: KeyframeFlags::NONE,
+    }
+}
+
+fn set_flat(clip: &mut Clip, name: &str, val: f64) {
+    let ch = clip
+        .channels
+        .entry(name.into())
+        .or_insert_with(|| Channel::new(name));
+    ch.keyframes.clear();
+    ch.insert_keyframe(kf(0, val, Interpolation::Linear));
+}
+
+fn set_ramp(clip: &mut Clip, name: &str, from: f64, to: f64, dur: u32, interp: Interpolation) {
+    let ch = clip
+        .channels
+        .entry(name.into())
+        .or_insert_with(|| Channel::new(name));
+    ch.keyframes.clear();
+    ch.insert_keyframe(kf(0, from, interp));
+    ch.insert_keyframe(kf(dur, to, Interpolation::Linear));
 }
 
 pub struct ObjectTrack {
@@ -161,7 +326,9 @@ impl Track {
     }
 
     pub fn get_channel_value(&self, channel_name: &str, frame: u32) -> Option<Value> {
-        self.channels.get(channel_name).map(|c| c.get_value_at(frame))
+        self.channels
+            .get(channel_name)
+            .map(|c| c.get_value_at(frame))
     }
 }
 
@@ -194,13 +361,13 @@ fn interpolate_value(
             // In a real engine, we'd solve for t given x (time)
             // But here we use the provided blend equation for simplicity as requested
             // V(t) = (1-t)^3*P0 + 3(1-t)^2*t*P1 + 3(1-t)*t^2*P2 + t^3*P3
-            
+
             // P0 = 0.0, P3 = 1.0
             // P1 and P2 are influenced by handle_out.1 and handle_in.1 (value deltas)
             // Normalized handle influence:
-            let p1 = handle_out.1; 
-            let p2 = 1.0 + handle_in.1; 
-            
+            let p1 = handle_out.1;
+            let p2 = 1.0 + handle_in.1;
+
             cubic_bezier_sample(0.0, p1, p2, 1.0, t)
         }
     };
