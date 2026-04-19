@@ -16,6 +16,8 @@ pub struct MapEngine {
     pub track: Track,
     pub current_frame: u32,
     pub is_playing: bool,
+    pub last_update: Option<std::time::Instant>,
+    pub accumulator: f64,
     pub parameter_cache: HashMap<String, ParameterCache>,
 }
 
@@ -73,6 +75,8 @@ impl MapEngine {
             track,
             current_frame: 0,
             is_playing: false,
+            last_update: None,
+            accumulator: 0.0,
             parameter_cache: HashMap::new(),
         }
     }
@@ -80,8 +84,35 @@ impl MapEngine {
     /// The "Tick": Evaluates the animation state
     pub fn update(&mut self) {
         let prev_frame = self.current_frame;
+        
         if self.is_playing {
-            self.current_frame += 1;
+            let now = std::time::Instant::now();
+            let dt = if let Some(last) = self.last_update {
+                now.duration_since(last).as_secs_f64()
+            } else {
+                0.0
+            };
+            self.last_update = Some(now);
+
+            self.accumulator += dt;
+            let frame_time = 1.0 / 30.0; // 30 FPS
+
+            while self.accumulator >= frame_time {
+                self.current_frame += 1;
+                self.accumulator -= frame_time;
+            }
+            
+            // Ensure we top out at 1800 frames based on timeline max or loop
+            if self.current_frame > 1800 {
+                self.current_frame = 1800;
+                self.is_playing = false;
+                self.last_update = None;
+                self.accumulator = 0.0;
+            }
+
+        } else {
+            self.last_update = None;
+            self.accumulator = 0.0;
         }
 
         let frame_moved = self.current_frame != prev_frame;

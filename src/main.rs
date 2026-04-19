@@ -5,9 +5,11 @@ mod engine;
 mod animation;
 mod transitions;
 mod ui_graph;
+mod timeline;
 
 use engine::MapEngine;
 use ui_graph::GraphEditor;
+use timeline::Timeline;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions::default();
@@ -22,6 +24,7 @@ fn main() -> Result<(), eframe::Error> {
 struct MyApp {
     map: MapEngine,
     graph_editor: GraphEditor,
+    timeline: Timeline,
     show_graph: bool,
 }
 
@@ -30,6 +33,7 @@ impl MyApp {
         Self {
             map: MapEngine::new(cc),
             graph_editor: GraphEditor::new(),
+            timeline: Timeline::new(),
             show_graph: false,
         }
     }
@@ -215,14 +219,12 @@ impl eframe::App for MyApp {
             .default_size(200.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
+                   ui.set_max_width(80.0);
                    if ui.button(if self.map.is_playing { "⏸" } else { "▶" }).clicked() {
                        self.map.is_playing = !self.map.is_playing;
                    }
                    
-                   let mut frame = self.map.current_frame as f32;
-                   if ui.add(egui::Slider::new(&mut frame, 0.0..=1000.0).text("Frame")).changed() {
-                       self.map.current_frame = frame as u32;
-                   }
+                   ui.label(format!("Frame: {}", self.map.current_frame));
                 });
 
                 ui.separator();
@@ -232,9 +234,7 @@ impl eframe::App for MyApp {
                         self.graph_editor.ui(ui, ch);
                     }
                 } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.heading("TIMELINE (Standard)");
-                    });
+                    self.timeline.ui(ui, &mut self.map);
                 }
             });
 
