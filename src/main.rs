@@ -49,6 +49,19 @@ struct MyApp {
 
 impl MyApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "dm_sans".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/DMSans-Variable.ttf")).into(),
+        );
+        // Put it as a fallback after the default font
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .push("dm_sans".to_owned());
+
+        cc.egui_ctx.set_fonts(fonts);
         Self {
             map: MapEngine::new(cc),
             graph_editor: GraphEditor::new(),
@@ -208,7 +221,7 @@ impl eframe::App for MyApp {
                                     ui.painter().text(
                                         row_rect.left_center() + egui::vec2(10.0, 0.0),
                                         egui::Align2::LEFT_CENTER,
-                                        format!("📍 {}", &res.display_name),
+                                        format!("• {}", &res.display_name),
                                         egui::FontId::proportional(12.0),
                                         egui::Color32::WHITE,
                                     );
@@ -246,8 +259,8 @@ impl eframe::App for MyApp {
             .show_inside(ui, |ui| {
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Camera, "🎥 Camera");
-                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Inspector, "📋 Inspector");
+                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Camera, "Camera");
+                    ui.selectable_value(&mut self.inspector_tab, InspectorTab::Inspector, "Inspector");
                 });
                 ui.separator();
 
@@ -266,8 +279,7 @@ impl eframe::App for MyApp {
 
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
-                    let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed() ||
-                                  ui.add(egui::DragValue::new(&mut zoom_val).speed(0.1)).changed();
+                    let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed();
 
                     if let Some(ch) = self.map.track.channels.get_mut("Zoom") {
                         let has_kf = ch.keyframes.iter().any(|k| k.frame == self.map.current_frame);
@@ -408,39 +420,64 @@ impl eframe::App for MyApp {
                                             }
 
                                             // Presets
-                                            let presets = [
-                                                ("🟠", [255, 140, 0, 100]),
-                                                ("🔵", [0, 120, 255, 100]),
-                                                ("🔴", [255, 50, 50, 100]),
-                                                ("🟢", [50, 200, 50, 100]),
+                                            let presets: &[([u8; 4], &str)] = &[
+                                                ([255, 140, 0,  100], "Orange"),
+                                                ([0,  120, 255, 100], "Blue"),
+                                                ([255, 50,  50, 100], "Red"),
+                                                ([50,  200, 50, 100], "Green"),
                                             ];
-
-                                            for (icon, rgba) in presets {
-                                                if ui.button(icon).clicked() {
-                                                    clip.color = rgba;
+                                            ui.horizontal(|ui| {
+                                                for &(rgba, label) in presets {
+                                                    let [r, g, b, _] = rgba;
+                                                    let swatch = egui::Button::new("")
+                                                        .fill(egui::Color32::from_rgb(r, g, b))
+                                                        .min_size(egui::vec2(20.0, 20.0));
+                                                    if ui.add(swatch).on_hover_text(label).clicked() {
+                                                        clip.color = rgba;
+                                                    }
                                                 }
-                                            }
+                                            });
                                         });
                                         ui.add_space(10.0);
                                         ui.label(egui::RichText::new("Transition Preset").strong());
 
-                                        let presets = [
-                                            ("None",       ClipPreset::None),
-                                            ("Fade In",    ClipPreset::FadeIn),
-                                            ("Fade Out",   ClipPreset::FadeOut),
-                                            ("Fade In/Out",ClipPreset::FadeInOut),
-                                            ("Pop In",     ClipPreset::PopIn),
-                                            ("Pop Out",    ClipPreset::PopOut),
-                                            ("Bounce In",  ClipPreset::BounceIn),
-                                            ("Grow + Fade",ClipPreset::GrowFade),
-                                        ];
-                                        ui.horizontal_wrapped(|ui| {
-                                            for (label, preset) in presets {
-                                                if ui.small_button(label).clicked() {
-                                                    crate::animation::apply_clip_preset(clip, preset, 20); // 20f default
+
+                                        ui.add_space(10.0);
+                                        ui.label(egui::RichText::new("Transition In").strong());
+                                        egui::ComboBox::from_id_salt("tx_in")
+                                            .width(ui.available_width())
+                                            .selected_text("Select...")
+                                            .show_ui(ui, |ui| {
+                                                for (label, preset) in [
+                                                    ("None",       ClipPreset::None),
+                                                    ("Fade",       ClipPreset::FadeIn),
+                                                    ("Pop",        ClipPreset::PopIn),
+                                                    ("Bounce",     ClipPreset::BounceIn),
+                                                    ("Grow-Fade",  ClipPreset::GrowFade),
+                                                ] {
+                                                    if ui.selectable_label(false, label).clicked() {
+                                                        apply_clip_preset(clip, preset, 20);
+                                                    }
                                                 }
-                                            }
-                                        });
+                                            });
+
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new("Transition Out").strong());
+                                        egui::ComboBox::from_id_salt("tx_out")
+                                            .width(ui.available_width())
+                                            .selected_text("Select...")
+                                            .show_ui(ui, |ui| {
+                                                for (label, preset) in [
+                                                    ("None",       ClipPreset::None),
+                                                    ("Fade",       ClipPreset::FadeOut),
+                                                    ("Pop",        ClipPreset::PopOut),
+                                                    ("Grow-Fade",  ClipPreset::GrowFade),
+                                                ] {
+                                                    if ui.selectable_label(false, label).clicked() {
+                                                        apply_clip_preset(clip, preset, 20);
+                                                    }
+                                                }
+                                            });
 
                                         ui.add_space(6.0);
                                         ui.label("Edit in Graph:");
@@ -458,12 +495,12 @@ impl eframe::App for MyApp {
                                             }
                                         });
                                         ui.add_space(10.0);
-                                        if ui.button("🚀 Snap to Fit").clicked() {
+                                        if ui.button("Snap to Fit").clicked() {
                                         snap_loc = Some(clip.location.clone());
                                     }
 
                                     ui.add_space(5.0);
-                                    if ui.button("🗑 Delete Clip").clicked() {
+                                    if ui.button("Delete Clip").clicked() {
                                         delete_requested = true;
                                     }
                                 }

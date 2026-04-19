@@ -38,7 +38,7 @@ pub fn search(query: &str) -> Result<Vec<LocationResult>, String> {
     // polygon_threshold=0.005 pre-simplifies server-side — India goes from ~3MB to ~50KB
     // limit=5 is plenty for a media pool picker
     let url = format!(
-        "https://nominatim.openstreetmap.org/search?q={}&format=jsonv2&polygon_geojson=1&polygon_threshold=0.005&limit=5",
+        "https://nominatim.openstreetmap.org/search?q={}&format=jsonv2&polygon_geojson=1&polygon_threshold=0.005&limit=5&accept-language=en",
         urlencoding::encode(query)
     );
 
