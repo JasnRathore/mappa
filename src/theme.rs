@@ -105,7 +105,6 @@ fn visuals() -> Visuals {
     v.warn_fg_color = DESTRUCTIVE;
     v.error_fg_color = DESTRUCTIVE;
     v.popup_shadow = egui::Shadow::NONE;
-    v.menu_rounding = CornerRadius::same(R_NONE);
 
     v.text_cursor = egui::style::TextCursorStyle {
         stroke: Stroke::new(2.0, PRIMARY),
