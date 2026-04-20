@@ -3,7 +3,6 @@ use eframe::{self, egui};
 
 mod animation;
 mod components;
-mod components;
 mod engine;
 mod geocoding;
 mod map_plugin;
@@ -13,7 +12,6 @@ mod transitions;
 mod ui_graph;
 
 use crate::animation::{ClipPreset, apply_clip_preset};
-use components::keyframe_button;
 use components::{button::keyframe_button, timeline::Timeline};
 use engine::MapEngine;
 use ui_graph::GraphEditor;
