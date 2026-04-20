@@ -86,6 +86,7 @@ fn run_project_manager(controller: AppController) {
                 controller.clone(),
                 AppState::ProjectManager,
                 project_manager::ProjectSettings::default(),
+                None,
             )))
         }),
     );
@@ -133,6 +134,7 @@ fn run_editor(controller: AppController, project_path: Option<std::path::PathBuf
                 controller.clone(),
                 AppState::Editor,
                 settings,
+                project_path,
             )))
         }),
     );
@@ -160,6 +162,14 @@ struct RenderSettings {
     custom_name: String,
 }
 
+#[derive(Default)]
+enum ThumbnailCaptureState {
+    #[default]
+    Idle,
+    Pending(usize),
+    WaitingForFrame(usize, egui::Rect), // index, canvas_rect at time of snapshot
+}
+
 struct EditorState {
     map: engine::MapEngine,
     graph_editor: ui_graph::GraphEditor,
@@ -179,6 +189,8 @@ struct EditorState {
     canvas_fit_to_screen: bool,
     render_settings: RenderSettings,
     render_queue: Vec<RenderJob>,
+    thumbnail_state: ThumbnailCaptureState,
+    project_path: Option<std::path::PathBuf>,
 }
 
 impl EditorState {
@@ -188,7 +200,7 @@ impl EditorState {
         // --- 1. ASPECT CALCULATION ---
         let proj_w = self.settings.resolution[0] as f32;
         let proj_h = self.settings.resolution[1] as f32;
-        let aspect = proj_w / proj_h;
+        let _aspect = proj_w / proj_h;
 
         let canvas_rect = if is_preview {
             // Preview mode: use workspace zoom/offset
@@ -247,6 +259,39 @@ impl EditorState {
         // --- 6. DRAW HUD (Preview ONLY) ---
         if is_preview {
             self.draw_canvas_hud(ui, canvas_rect);
+        }
+
+        // --- 7. THUMBNAIL CAPTURE STATE MACHINE ---
+        if is_preview && !matches!(self.thumbnail_state, ThumbnailCaptureState::Idle) {
+            match self.thumbnail_state {
+                ThumbnailCaptureState::Pending(i) => {
+                    // Set frame/position for snapshot i
+                    // Logic: Find start of clip i
+                    let mut target_frame = 0;
+                    if let Some(track) = self.map.track.object_tracks.first() {
+                        if let Some(clip) = track.clips.get(i) {
+                            target_frame = clip.start_frame;
+                        } else {
+                            // If fewer than 5 clips, just use last clip's start or some padding
+                            target_frame = 0;
+                        }
+                    }
+                    
+                    self.map.current_frame = target_frame;
+                    self.map.update(); // Sync map to new frame
+
+                    // Request shot
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(egui::Id::from("thumb"))));
+                    self.thumbnail_state = ThumbnailCaptureState::WaitingForFrame(i, canvas_rect);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn update_thumbnails(&mut self) {
+        if self.project_path.is_some() {
+            self.thumbnail_state = ThumbnailCaptureState::Pending(0);
         }
     }
 
@@ -457,7 +502,7 @@ impl EditorState {
             ui.add_space(15.0);
 
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for (idx, job) in self.render_queue.iter().enumerate() {
+                for (_idx, job) in self.render_queue.iter().enumerate() {
                     ui.group(|ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -536,6 +581,7 @@ impl MyApp {
         controller: AppController,
         initial_state: AppState,
         settings: project_manager::ProjectSettings,
+        project_path: Option<std::path::PathBuf>,
     ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -603,6 +649,8 @@ impl MyApp {
             render_queue: vec![
                 RenderJob { name: "Job 1".to_string(), status: "Ready".to_string(), progress: 0.0 },
             ],
+            thumbnail_state: ThumbnailCaptureState::Idle,
+            project_path, 
         };
         editor_state.map.fps = settings.fps;
 
@@ -630,6 +678,71 @@ impl eframe::App for MyApp {
             AppState::Editor => self.ui_editor(ui, frame),
         }
         let ctx = ui.ctx();
+          // --- HANDLE THUMBNAIL SCREENSHOTS ---
+        let mut screenshot_data = None;
+        ctx.input(|i| {
+            for event in &i.raw.events {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    screenshot_data = Some(image.clone());
+                    break;
+                }
+            }
+        });
+
+        if let Some(image) = screenshot_data {
+            if let ThumbnailCaptureState::WaitingForFrame(idx, rect) = self.editor.thumbnail_state {
+                if let Some(path) = &self.editor.project_path {
+                    let thumb_dir = path.join(".thumbnails");
+                    if !thumb_dir.exists() {
+                        let _ = std::fs::create_dir_all(&thumb_dir);
+                    }
+
+                    // Image is full viewport, we need to crop to rect
+                    // rect is in screen coords, map to pixel coords
+                    let pixels_per_point = ctx.pixels_per_point();
+                    let px_rect = egui::Rect::from_min_max(
+                        egui::pos2(rect.min.x * pixels_per_point, rect.min.y * pixels_per_point),
+                        egui::pos2(rect.max.x * pixels_per_point, rect.max.y * pixels_per_point),
+                    );
+
+                    // Bounds checking
+                    let left = (px_rect.left() as usize).min(image.width() - 1);
+                    let top = (px_rect.top() as usize).min(image.height() - 1);
+                    let right = (px_rect.right() as usize).min(image.width());
+                    let bottom = (px_rect.bottom() as usize).min(image.height());
+
+                    let crop_w = right.saturating_sub(left);
+                    let crop_h = bottom.saturating_sub(top);
+
+                    if crop_w > 0 && crop_h > 0 {
+                        let mut cropped = egui::ColorImage::new([crop_w, crop_h], vec![egui::Color32::TRANSPARENT; crop_w * crop_h]);
+                        for y in 0..crop_h {
+                            for x in 0..crop_w {
+                                cropped.pixels[y * crop_w + x] = image.pixels[(top + y) * image.width() + (left + x)];
+                            }
+                        }
+
+                        // Save to file
+                        let thumb_path = thumb_dir.join(format!("{}.png", idx));
+                        let image_buffer = image::RgbaImage::from_fn(crop_w as u32, crop_h as u32, |x, y| {
+                            let p = cropped.pixels[y as usize * crop_w + x as usize];
+                            image::Rgba([p.r(), p.g(), p.b(), p.a()])
+                        });
+                        let _ = image_buffer.save(thumb_path);
+                    }
+
+                    // Advance to next or Idle
+                    if idx < 4 {
+                        self.editor.thumbnail_state = ThumbnailCaptureState::Pending(idx + 1);
+                    } else {
+                        self.editor.thumbnail_state = ThumbnailCaptureState::Idle;
+                        // Refresh projects to load new thumbnails
+                        self.project_manager.load_projects();
+                    }
+                }
+            }
+        }
+
         if let Some(cmd) = self.controller.command.lock().unwrap().take() {
             match cmd {
                 AppCommand::OpenEditor(path) => {
@@ -815,6 +928,7 @@ impl MyApp {
                                                 name: self.new_project_name.clone(),
                                                 resolution: self.new_project_resolution,
                                                 fps: self.new_project_fps,
+                                                poster_frames: Vec::new(),
                                             };
                                             let settings_json = serde_json::to_string_pretty(&settings).unwrap();
                                             let _ = std::fs::write(path.join("project.json"), settings_json);
@@ -961,6 +1075,15 @@ impl MyApp {
                 if ui.button("Render").clicked() {
                     editor.show_render_window = true;
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(format!("{} SAVE", egui_phosphor::regular::FLOPPY_DISK)).clicked() {
+                        if let Some(path) = &editor.project_path {
+                            let settings_json = serde_json::to_string_pretty(&editor.settings).unwrap();
+                            let _ = std::fs::write(path.join("project.json"), settings_json);
+                            editor.update_thumbnails();
+                        }
+                    }
+                });
             });
         });
 

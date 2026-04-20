@@ -7,6 +7,7 @@ pub struct ProjectSettings {
     pub name: String,
     pub resolution: [u32; 2],
     pub fps: f32,
+    pub poster_frames: Vec<u32>, // Frame indices for thumbnails
 }
 
 impl Default for ProjectSettings {
@@ -15,16 +16,19 @@ impl Default for ProjectSettings {
             name: "New Project".to_string(),
             resolution: [1920, 1080],
             fps: 30.0,
+            poster_frames: Vec::new(),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     pub path: PathBuf,
     pub last_modified: String,
     pub settings: ProjectSettings,
+    #[serde(skip)]
+    pub thumbnail_textures: Vec<egui::TextureHandle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,10 +83,10 @@ impl ProjectManager {
                     } else {
                         ProjectSettings {
                             name: path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("Unknown")
-                                .to_string(),
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string(),
                             ..Default::default()
                         }
                     };
@@ -98,7 +102,42 @@ impl ProjectManager {
                         path: path.clone(),
                         last_modified,
                         settings,
+                        thumbnail_textures: Vec::new(),
                     });
+                }
+            }
+        }
+    }
+
+    pub fn load_thumbnail_textures(&mut self, ctx: &egui::Context) {
+        for project in &mut self.projects {
+            if !project.thumbnail_textures.is_empty() {
+                continue;
+            }
+
+            let thumb_dir = project.path.join(".thumbnails");
+            if thumb_dir.exists() {
+                for i in 0..5 {
+                    let thumb_path = thumb_dir.join(format!("{}.png", i));
+                    if thumb_path.exists() {
+                        if let Ok(bytes) = fs::read(&thumb_path) {
+                            if let Ok(image) = image::load_from_memory(&bytes) {
+                                let size = [image.width() as usize, image.height() as usize];
+                                let image_buffer = image.to_rgba8();
+                                let pixels = image_buffer.as_flat_samples();
+                                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                                    size,
+                                    pixels.as_slice(),
+                                );
+                                let tex = ctx.load_texture(
+                                    format!("{}_thumb_{}", project.name, i),
+                                    color_image,
+                                    Default::default(),
+                                );
+                                project.thumbnail_textures.push(tex);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -128,6 +167,7 @@ impl ProjectManager {
             path: project_path.clone(),
             last_modified: String::from("now"),
             settings,
+            thumbnail_textures: Vec::new(),
         };
 
         self.projects.push(project);
@@ -192,6 +232,7 @@ impl ProjectManager {
         let mut action = None;
 
         // Header
+        self.load_thumbnail_textures(ui.ctx());
         ui.add_space(30.0);
         ui.horizontal(|ui| {
             ui.heading(
@@ -322,22 +363,44 @@ impl ProjectManager {
 
         // Thumbnail area
         let thumbnail_rect = egui::Rect::from_min_size(rect.min, egui::vec2(220.0, 110.0));
-        ui.painter()
-            .rect_filled(thumbnail_rect, 8.0, egui::Color32::from_gray(25));
+        
+        let mut drawn_thumb = false;
+        if !project.thumbnail_textures.is_empty() {
+            let mut thumb_idx = 0;
+            if response.hovered() {
+                let rel_x = (ui.input(|i| i.pointer.interact_pos()).unwrap_or(egui::Pos2::ZERO).x - rect.left()) / rect.width();
+                thumb_idx = ((rel_x * project.thumbnail_textures.len() as f32) as usize).min(project.thumbnail_textures.len() - 1);
+            }
 
-        // Icon (3 circles like DaVinci Resolve)
-        let icon_center = thumbnail_rect.center();
-        let circle_color = if is_selected {
-            egui::Color32::from_rgb(255, 165, 0)
-        } else {
-            egui::Color32::from_gray(90)
-        };
+            if let Some(tex) = project.thumbnail_textures.get(thumb_idx) {
+                ui.painter().image(
+                    tex.id(),
+                    thumbnail_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                drawn_thumb = true;
+            }
+        }
 
-        ui.painter()
-            .circle_filled(icon_center + egui::vec2(-14.0, 0.0), 10.0, circle_color);
-        ui.painter().circle_filled(icon_center, 10.0, circle_color);
-        ui.painter()
-            .circle_filled(icon_center + egui::vec2(14.0, 0.0), 10.0, circle_color);
+        if !drawn_thumb {
+            ui.painter()
+                .rect_filled(thumbnail_rect, 0.0, egui::Color32::from_gray(25));
+
+            // Icon (3 circles like DaVinci Resolve)
+            let icon_center = thumbnail_rect.center();
+            let circle_color = if is_selected {
+                egui::Color32::from_rgb(255, 165, 0)
+            } else {
+                egui::Color32::from_gray(90)
+            };
+
+            ui.painter()
+                .circle_filled(icon_center + egui::vec2(-14.0, 0.0), 10.0, circle_color);
+            ui.painter().circle_filled(icon_center, 10.0, circle_color);
+            ui.painter()
+                .circle_filled(icon_center + egui::vec2(14.0, 0.0), 10.0, circle_color);
+        }
 
         // Project name
         let name_pos = rect.min + egui::vec2(12.0, 115.0);
