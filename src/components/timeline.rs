@@ -2,7 +2,6 @@ use crate::animation::{Channel, ObjectTrack};
 use crate::engine::MapEngine;
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  Edit Modes
 // ─────────────────────────────────────────────────────────────────────────────
