@@ -1,4 +1,4 @@
-use eframe::egui::{CentralPanel, Panel};
+use eframe::egui::{CentralPanel, Panel, Align};
 use eframe::{self, egui};
 
 mod animation;
@@ -10,11 +10,13 @@ mod theme;
 mod timeline;
 mod transitions;
 mod ui_graph;
+mod components;
 
 use crate::animation::{ClipPreset, apply_clip_preset};
 use engine::MapEngine;
 use timeline::Timeline;
 use ui_graph::GraphEditor;
+use components::keyframe_button;
 
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions::default();
@@ -53,7 +55,6 @@ struct EditorState {
     inspector_tab: InspectorTab,
     selected_clip_channel: Option<String>, // "Alpha" or "Scale"
 }
-
 struct MyApp {
     app_state: AppState,
     project_manager: project_manager::ProjectManager,
@@ -64,18 +65,43 @@ struct MyApp {
 
 impl MyApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut fonts = egui::FontDefinitions::default();
+       let mut fonts = egui::FontDefinitions::default();
+
         fonts.font_data.insert(
             "dm_sans".to_owned(),
             egui::FontData::from_static(include_bytes!("../assets/DMSans-Variable.ttf")).into(),
         );
-        // Put it as a fallback after the default font
+
         fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
             .unwrap()
             .push("dm_sans".to_owned());
 
+        // --- Phosphor Regular ---
+        fonts.font_data.insert(
+            "phosphor_regular".into(),
+            egui_phosphor::Variant::Regular.font_data().into(),
+        );
+
+        // --- Phosphor Fill ---
+        fonts.font_data.insert(
+            "phosphor_fill".into(),
+            egui_phosphor::Variant::Fill.font_data().into(),
+        );
+
+        // 👉 Make phosphor a fallback (not primary)
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .push("phosphor_regular".into());
+
+        // Separate family for fill icons
+        fonts.families.insert(
+            egui::FontFamily::Name("phosphor_fill".into()),
+            vec!["phosphor_fill".into()],
+        );
         cc.egui_ctx.set_fonts(fonts);
         theme::apply(&cc.egui_ctx);
 
@@ -382,8 +408,6 @@ impl MyApp {
                         ui.label(egui::RichText::new("Camera Settings").strong());
                         ui.add_space(5.0);
 
-                        ui.label(format!("Frame: {}", editor.map.current_frame));
-
                         ui.separator();
                         ui.label("Map Viewport");
 
@@ -394,14 +418,16 @@ impl MyApp {
                     ui.label("Zoom:");
                     let changed = ui.add(egui::Slider::new(&mut zoom_val, 0.1..=20.0)).changed();
 
-                    if let Some(ch) = editor.map.track.channels.get_mut("Zoom") {
-                        let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
-                        let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if let Some(ch) = editor.map.track.channels.get_mut("Zoom") {
+                            let (clicked, has_kf) = keyframe_button(
+                                ui,
+                                ch,
+                                editor.map.current_frame,
+                                animation::Value::Float(zoom_val),
+                            );
 
-                        if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
-                            if has_kf {
-                                ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
-                            } else {
+                            if changed {
                                 ch.insert_keyframe(animation::Keyframe {
                                     frame: editor.map.current_frame,
                                     value: animation::Value::Float(zoom_val),
@@ -409,18 +435,9 @@ impl MyApp {
                                     flags: animation::KeyframeFlags::NONE,
                                 });
                             }
-                            ch.dirty = true;
-                        }
 
-                        if changed {
-                            ch.insert_keyframe(animation::Keyframe {
-                                frame: editor.map.current_frame,
-                                value: animation::Value::Float(zoom_val),
-                                interpolation: animation::Interpolation::Linear,
-                                flags: animation::KeyframeFlags::NONE,
-                            });
                         }
-                    }
+                    });
                 });
 
                 let current_pos = editor.map.parameter_cache.get("Position")
@@ -428,28 +445,20 @@ impl MyApp {
                     .unwrap_or(animation::Value::Position(0.0, 20.0));
 
                 if let animation::Value::Position(mut lon, mut lat) = current_pos {
-                    // Pos X Row
-                    ui.horizontal(|ui| {
-                        ui.label("Pos X:");
-                        let changed = ui.add(egui::DragValue::new(&mut lon).speed(0.1)).changed();
+                // Pos X Row
+                ui.horizontal(|ui| {
+                    ui.label("Pos X:");
+                    let changed = ui.add(egui::DragValue::new(&mut lon).speed(0.1)).changed();
 
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(ch) = editor.map.track.channels.get_mut("Position") {
-                            let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
-                            let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
-
-                            if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
-                                if has_kf {
-                                    ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
-                                } else {
-                                    ch.insert_keyframe(animation::Keyframe {
-                                        frame: editor.map.current_frame,
-                                        value: animation::Value::Position(lon, lat),
-                                        interpolation: animation::Interpolation::Linear,
-                                        flags: animation::KeyframeFlags::NONE,
-                                    });
-                                }
-                                ch.dirty = true;
-                            }
+                            let (clicked, has_kf) = keyframe_button(
+                                ui,
+                                ch,
+                                editor.map.current_frame,
+                                animation::Value::Float(lon),
+                            );
+                            
 
                             if changed {
                                 ch.insert_keyframe(animation::Keyframe {
@@ -461,29 +470,21 @@ impl MyApp {
                             }
                         }
                     });
+                });
 
-                    // Pos Y Row
-                    ui.horizontal(|ui| {
-                        ui.label("Pos Y:");
-                        let changed = ui.add(egui::DragValue::new(&mut lat).speed(0.1)).changed();
+                // Pos Y Row
+                ui.horizontal(|ui| {
+                    ui.label("Pos Y:");
+                    let changed = ui.add(egui::DragValue::new(&mut lat).speed(0.1)).changed();
 
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some(ch) = editor.map.track.channels.get_mut("Position") {
-                            let has_kf = ch.keyframes.iter().any(|k| k.frame == editor.map.current_frame);
-                            let kf_btn_color = if has_kf { egui::Color32::from_rgb(255, 128, 0) } else { egui::Color32::GRAY };
-
-                            if ui.button(egui::RichText::new("◆").color(kf_btn_color)).clicked() {
-                                if has_kf {
-                                    ch.keyframes.retain(|k| k.frame != editor.map.current_frame);
-                                } else {
-                                    ch.insert_keyframe(animation::Keyframe {
-                                        frame: editor.map.current_frame,
-                                        value: animation::Value::Position(lon, lat),
-                                        interpolation: animation::Interpolation::Linear,
-                                        flags: animation::KeyframeFlags::NONE,
-                                    });
-                                }
-                                ch.dirty = true;
-                            }
+                            let (clicked, has_kf) = keyframe_button(
+                                ui,
+                                ch,
+                                editor.map.current_frame,
+                                animation::Value::Float(lat),
+                            );
 
                             if changed {
                                 ch.insert_keyframe(animation::Keyframe {
@@ -495,6 +496,7 @@ impl MyApp {
                             }
                         }
                     });
+                });
                 }
 
                         ui.separator();
@@ -658,31 +660,51 @@ impl MyApp {
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Playback Transport Controls
-                    if ui.button("⏮").on_hover_text("Go to Start").clicked() {
+                    if ui
+                        .button(egui_phosphor::regular::SKIP_BACK)
+                        .on_hover_text("Go to Start")
+                        .clicked()
+                    {
                         editor.map.current_frame = 0;
                         editor.map.is_playing = false;
                     }
 
-                    if ui.button("◄").on_hover_text("Previous Frame").clicked() {
+                    if ui
+                        .button(egui_phosphor::regular::CARET_LEFT)
+                        .on_hover_text("Previous Frame")
+                        .clicked()
+                    {
                         if editor.map.current_frame > 0 {
                             editor.map.current_frame -= 1;
                         }
                         editor.map.is_playing = false;
                     }
 
-                    let play_icon = if editor.map.is_playing { "⏸" } else { "▶" };
+                    let play_icon = if editor.map.is_playing {
+                        egui_phosphor::regular::PAUSE
+                    } else {
+                        egui_phosphor::regular::PLAY
+                    };
                     if ui.button(play_icon).on_hover_text("Play/Pause").clicked() {
                         editor.map.is_playing = !editor.map.is_playing;
                     }
 
-                    if ui.button("►").on_hover_text("Next Frame").clicked() {
+                    if ui
+                        .button(egui_phosphor::regular::CARET_RIGHT)
+                        .on_hover_text("Next Frame")
+                        .clicked()
+                    {
                         if editor.map.current_frame < 1800 {
                             editor.map.current_frame += 1;
                         }
                         editor.map.is_playing = false;
                     }
 
-                    if ui.button("⏭").on_hover_text("Go to End").clicked() {
+                    if ui
+                        .button(egui_phosphor::regular::SKIP_FORWARD)
+                        .on_hover_text("Go to End")
+                        .clicked()
+                    {
                         editor.map.current_frame = 1800; // Based on timeline max
                         editor.map.is_playing = false;
                     }
