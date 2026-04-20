@@ -158,10 +158,72 @@ struct EditorState {
     selected_clip_channel: Option<String>,
     show_render_window: bool,
     settings: project_manager::ProjectSettings,
+    canvas_zoom: f32,
+    canvas_offset: egui::Vec2,
+    canvas_fit_to_screen: bool,
 }
 
 impl EditorState {
-    fn render_view(&mut self, ui: &mut egui::Ui) {
+    fn render_view(&mut self, ui: &mut egui::Ui, is_preview: bool) {
+        let available_rect = ui.max_rect();
+        
+        if is_preview {
+            // --- 1. HANDLE CANVAS INTERACTIONS ---
+            self.handle_canvas_input(ui, available_rect);
+
+            // --- 2. CALCULATE CANVAS RECT ---
+            let mut canvas_w = self.settings.resolution[0] as f32;
+            let mut canvas_h = self.settings.resolution[1] as f32;
+
+            if self.canvas_fit_to_screen {
+                let padding = 40.0;
+                let fit_w = available_rect.width() - padding * 2.0;
+                let fit_h = available_rect.height() - padding * 2.0;
+
+                let scale_w = fit_w / canvas_w;
+                let scale_h = fit_h / canvas_h;
+                self.canvas_zoom = scale_w.min(scale_h).min(1.0);
+                
+                // Re-center when fitting
+                self.canvas_offset = egui::Vec2::ZERO;
+            }
+
+            canvas_w *= self.canvas_zoom;
+            canvas_h *= self.canvas_zoom;
+
+            let canvas_rect = egui::Rect::from_center_size(
+                available_rect.center() + self.canvas_offset,
+                egui::vec2(canvas_w, canvas_h),
+            );
+
+            // --- 3. DRAW WORKSPACE BACKGROUND ---
+            ui.painter().rect_filled(available_rect, 0.0, crate::theme::BG_PANEL);
+
+            // --- 4. DRAW CANVAS SHADOW & BORDER ---
+            let shadow_rect = canvas_rect.expand(4.0);
+            ui.painter().rect_filled(shadow_rect, 0.0, egui::Color32::from_black_alpha(40));
+            ui.painter().rect_stroke(canvas_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
+
+            // --- 5. DRAW CHECKERBOARD ---
+            self.draw_checkerboard(ui, canvas_rect);
+
+            // --- 6. RENDER CONTENT ---
+            self.render_content(ui, canvas_rect);
+
+            // --- 7. DRAW HUD (STATUS BAR) ---
+            self.draw_canvas_hud(ui, canvas_rect);
+        } else {
+            // "Clean" mode: Just render content to the available rect
+            self.render_content(ui, available_rect);
+        }
+    }
+
+    fn render_content(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        
+        self.map.ui(&mut canvas_ui);
+
+        // Effects (Dissolve / Wipe) relative to rect
         let dissolve = self
             .map
             .parameter_cache
@@ -176,23 +238,108 @@ impl EditorState {
             .map(|c| c.value.as_float())
             .unwrap_or(1.0);
 
-        let rect = ui.max_rect();
-        let wipe_width = rect.width() * wipe as f32;
-        let wipe_rect = egui::Rect::from_min_max(
-            rect.min,
-            rect.min + egui::vec2(wipe_width, rect.height()),
-        );
-
-        ui.set_clip_rect(wipe_rect);
-        self.map.ui(ui);
+        if wipe < 1.0 {
+            let wipe_width = rect.width() * (1.0 - wipe as f32);
+            let wipe_overlay = egui::Rect::from_min_max(
+                rect.right_top() - egui::vec2(wipe_width, 0.0),
+                rect.right_bottom(),
+            );
+            canvas_ui.painter().rect_filled(wipe_overlay, 0.0, egui::Color32::BLACK);
+        }
 
         if dissolve > 0.0 {
-            ui.painter().rect_filled(
+            canvas_ui.painter().rect_filled(
                 rect,
                 0.0,
                 egui::Color32::BLACK.linear_multiply(dissolve as f32),
             );
         }
+    }
+
+    fn handle_canvas_input(&mut self, ui: &egui::Ui, available_rect: egui::Rect) {
+        let response = ui.interact(available_rect, ui.id().with("canvas_input"), egui::Sense::click_and_drag());
+        
+        // Panning: Middle mouse or Space + Left Mouse
+        let is_panning = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle)) ||
+                         (ui.input(|i| i.key_down(egui::Key::Space)) && response.dragged());
+        
+        if is_panning {
+            self.canvas_offset += response.drag_delta();
+            self.canvas_fit_to_screen = false;
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+
+        // Zooming: Ctrl + Scroll
+        let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll_delta != 0.0 {
+            let zoom_factor = (scroll_delta / 200.0).exp();
+            let new_zoom = (self.canvas_zoom * zoom_factor).clamp(0.01, 10.0);
+            
+            if (new_zoom - self.canvas_zoom).abs() > 0.0001 {
+                // Adjust offset so we zoom toward the pointer
+                if let Some(ptr_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    let ptr_local = ptr_pos - (available_rect.center() + self.canvas_offset);
+                    self.canvas_offset -= ptr_local * (new_zoom / self.canvas_zoom - 1.0);
+                }
+                
+                self.canvas_zoom = new_zoom;
+                self.canvas_fit_to_screen = false;
+            }
+        }
+
+        // Reset: 'F' key to fit
+        if ui.input(|i| i.key_pressed(egui::Key::F)) {
+            self.canvas_fit_to_screen = true;
+        }
+    }
+
+    fn draw_checkerboard(&self, ui: &egui::Ui, rect: egui::Rect) {
+        let painter = ui.painter().with_clip_rect(rect);
+        let grid_size = 16.0;
+        
+        let color1 = egui::Color32::from_gray(25);
+        let color2 = egui::Color32::from_gray(35);
+        
+        let start_x = (rect.min.x / grid_size).floor() as i32;
+        let start_y = (rect.min.y / grid_size).floor() as i32;
+        let end_x = (rect.max.x / grid_size).ceil() as i32;
+        let end_y = (rect.max.y / grid_size).ceil() as i32;
+
+        for x in start_x..end_x {
+            for y in start_y..end_y {
+                let cell_rect = egui::Rect::from_min_size(
+                    egui::pos2(x as f32 * grid_size, y as f32 * grid_size),
+                    egui::vec2(grid_size, grid_size),
+                );
+                
+                // Intersect with canvas rect
+                let visible_rect = cell_rect.intersect(rect);
+                if visible_rect.is_positive() {
+                    let color = if (x + y) % 2 == 0 { color1 } else { color2 };
+                    painter.rect_filled(visible_rect, 0.0, color);
+                }
+            }
+        }
+    }
+
+    fn draw_canvas_hud(&self, ui: &egui::Ui, canvas_rect: egui::Rect) {
+        let hud_rect = egui::Rect::from_min_max(
+            canvas_rect.left_bottom() + egui::vec2(0.0, 4.0),
+            canvas_rect.right_bottom() + egui::vec2(0.0, 24.0)
+        );
+        
+        ui.painter().text(
+            hud_rect.left_top(),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{}% | {}x{} | Press 'F' to Fit",
+                (self.canvas_zoom * 100.0) as i32,
+                self.settings.resolution[0],
+                self.settings.resolution[1]
+            ),
+            egui::FontId::monospace(10.0),
+            egui::Color32::from_gray(120)
+        );
     }
 }
 
@@ -292,6 +439,9 @@ impl MyApp {
             selected_clip_channel: None,
             show_render_window: false,
             settings: settings.clone(),
+            canvas_zoom: 1.0,
+            canvas_offset: egui::Vec2::ZERO,
+            canvas_fit_to_screen: true,
         };
         editor_state.map.fps = settings.fps;
 
@@ -374,7 +524,7 @@ impl eframe::App for MyApp {
                         close_requested = true;
                     }
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        self.editor.render_view(ui);
+                        self.editor.render_view(ui, false);
                     });
                 },
             );
@@ -1116,7 +1266,7 @@ impl MyApp {
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            editor.render_view(ui);
+            editor.render_view(ui, true);
         });
     }
 }
