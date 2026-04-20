@@ -13,6 +13,45 @@ use egui::Panel;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+struct ProjectPreset {
+    label: &'static str,
+    resolution: [u32; 2],
+    fps: f32,
+}
+
+const PROJECT_PRESETS: &[ProjectPreset] = &[
+    ProjectPreset {
+        label: "HD 1080p (30 FPS)",
+        resolution: [1920, 1080],
+        fps: 30.0,
+    },
+    ProjectPreset {
+        label: "HD 1080p (60 FPS)",
+        resolution: [1920, 1080],
+        fps: 60.0,
+    },
+    ProjectPreset {
+        label: "4K UHD (30 FPS)",
+        resolution: [3840, 2160],
+        fps: 30.0,
+    },
+    ProjectPreset {
+        label: "Vertical Social (30 FPS)",
+        resolution: [1080, 1920],
+        fps: 30.0,
+    },
+    ProjectPreset {
+        label: "Vertical Social (60 FPS)",
+        resolution: [1080, 1920],
+        fps: 60.0,
+    },
+    ProjectPreset {
+        label: "Custom",
+        resolution: [1920, 1080],
+        fps: 30.0,
+    },
+];
+
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().collect();
     let controller = AppController {
@@ -179,6 +218,7 @@ struct MyApp {
     new_project_name: String,
     new_project_fps: f32,
     new_project_resolution: [u32; 2],
+    new_project_preset_idx: usize,
     show_new_project_dialog: bool,
 
     renaming_project_idx: Option<usize>,
@@ -263,6 +303,7 @@ impl MyApp {
             new_project_name: String::new(),
             new_project_fps: 30.0,
             new_project_resolution: [1920, 1080],
+            new_project_preset_idx: 0,
             show_new_project_dialog: false,
             renaming_project_idx: None,
             rename_temp_name: String::new(),
@@ -305,11 +346,29 @@ impl eframe::App for MyApp {
 
         let mut close_requested = false;
         if self.app_state == AppState::Editor && self.editor.show_render_window {
+            let res = self.editor.settings.resolution;
+            
+            // Scaling logic: If resolution is too large for current screen, scale it down
+            // but keep the aspect ratio.
+            let max_w = 1600.0;
+            let max_h = 900.0;
+            
+            let mut w = res[0] as f32;
+            let mut h = res[1] as f32;
+            
+            if w > max_w || h > max_h {
+                let scale_w = max_w / w;
+                let scale_h = max_h / h;
+                let scale = scale_w.min(scale_h);
+                w *= scale;
+                h *= scale;
+            }
+
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("render_window"),
                 egui::ViewportBuilder::default()
-                    .with_title("Render Window")
-                    .with_inner_size([1200.0, 700.0]),
+                    .with_title(format!("Render Window - {}x{}", res[0], res[1]))
+                    .with_inner_size([w, h]),
                 |ctx, _class| {
                     if ctx.input(|i| i.viewport().close_requested()) {
                         close_requested = true;
@@ -352,9 +411,10 @@ impl MyApp {
         });
 
         if self.show_new_project_dialog {
-            let mut open = true;
+            let mut is_open = true;
+            let mut close_clicked = false;
             egui::Window::new("NEW PROJECT")
-                .open(&mut open)
+                .open(&mut is_open)
                 .resizable(false)
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -369,19 +429,46 @@ impl MyApp {
                                 
                                 ui.add_space(15.0);
 
+                                ui.label(egui::RichText::new("PRESET").size(11.0).color(crate::theme::TEXT_MUTED));
+                                ui.add_space(4.0);
+                                let old_preset = self.new_project_preset_idx;
+                                egui::ComboBox::from_id_salt("project_preset")
+                                    .selected_text(PROJECT_PRESETS[self.new_project_preset_idx].label)
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        for (idx, preset) in PROJECT_PRESETS.iter().enumerate() {
+                                            ui.selectable_value(&mut self.new_project_preset_idx, idx, preset.label);
+                                        }
+                                    });
+                                
+                                if self.new_project_preset_idx != old_preset && self.new_project_preset_idx < PROJECT_PRESETS.len() - 1 {
+                                    // Non-custom preset selected
+                                    let p = &PROJECT_PRESETS[self.new_project_preset_idx];
+                                    self.new_project_resolution = p.resolution;
+                                    self.new_project_fps = p.fps;
+                                }
+
+                                ui.add_space(15.0);
+
                                 ui.label(egui::RichText::new("RESOLUTION").size(11.0).color(crate::theme::TEXT_MUTED));
                                 ui.add_space(4.0);
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::DragValue::new(&mut self.new_project_resolution[0]).speed(1));
+                                    let r_w = ui.add(egui::DragValue::new(&mut self.new_project_resolution[0]).speed(1));
                                     ui.label("x");
-                                    ui.add(egui::DragValue::new(&mut self.new_project_resolution[1]).speed(1));
+                                    let r_h = ui.add(egui::DragValue::new(&mut self.new_project_resolution[1]).speed(1));
+                                    
+                                    if r_w.changed() || r_h.changed() {
+                                        self.new_project_preset_idx = PROJECT_PRESETS.len() - 1; // Custom
+                                    }
                                 });
 
                                 ui.add_space(15.0);
 
                                 ui.label(egui::RichText::new("FPS").size(11.0).color(crate::theme::TEXT_MUTED));
                                 ui.add_space(4.0);
-                                ui.add(egui::DragValue::new(&mut self.new_project_fps).speed(1));
+                                if ui.add(egui::DragValue::new(&mut self.new_project_fps).speed(1)).changed() {
+                                    self.new_project_preset_idx = PROJECT_PRESETS.len() - 1; // Custom
+                                }
 
                                 ui.add_space(25.0);
 
@@ -403,26 +490,29 @@ impl MyApp {
                                             let _ = std::fs::write(path.join("project.json"), settings_json);
 
                                             self.new_project_name.clear();
-                                            self.show_new_project_dialog = false;
+                                            close_clicked = true;
                                             *self.controller.command.lock().unwrap() = Some(AppCommand::OpenEditor(path));
                                         }
                                     }
 
                                     if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
                                         self.new_project_name.clear();
-                                        self.show_new_project_dialog = false;
+                                        close_clicked = true;
                                     }
                                 });
                             });
                         });
                 });
-            self.show_new_project_dialog = open;
+            if !is_open || close_clicked {
+                self.show_new_project_dialog = false;
+            }
         }
 
         if let Some(idx) = self.renaming_project_idx {
-            let mut open = true;
+            let mut is_open = true;
+            let mut close_clicked = false;
             egui::Window::new("RENAME PROJECT")
-                .open(&mut open)
+                .open(&mut is_open)
                 .resizable(false)
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -446,25 +536,26 @@ impl MyApp {
                                     );
                                     if btn_rename.clicked() && !self.rename_temp_name.is_empty() {
                                         let _ = self.project_manager.rename_project(idx, self.rename_temp_name.clone());
-                                        self.renaming_project_idx = None;
+                                        close_clicked = true;
                                     }
                                     if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
-                                        self.renaming_project_idx = None;
+                                        close_clicked = true;
                                     }
                                 });
                             });
                         });
                 });
-            if !open {
+            if !is_open || close_clicked {
                 self.renaming_project_idx = None;
             }
         }
 
         if let Some(idx) = self.deleting_project_idx {
-            let mut open = true;
+            let mut is_open = true;
+            let mut close_clicked = false;
             let project_name = self.project_manager.projects[idx].name.clone();
             egui::Window::new("DELETE PROJECT")
-                .open(&mut open)
+                .open(&mut is_open)
                 .resizable(false)
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -487,16 +578,16 @@ impl MyApp {
                                     );
                                     if btn_delete.clicked() {
                                         let _ = self.project_manager.delete_project(idx);
-                                        self.deleting_project_idx = None;
+                                        close_clicked = true;
                                     }
                                     if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
-                                        self.deleting_project_idx = None;
+                                        close_clicked = true;
                                     }
                                 });
                             });
                         });
                 });
-            if !open {
+            if !is_open || close_clicked {
                 self.deleting_project_idx = None;
             }
         }
