@@ -202,6 +202,10 @@ impl EditorState {
         let proj_h = self.settings.resolution[1] as f32;
         let _aspect = proj_w / proj_h;
 
+        let ppp = ui.ctx().pixels_per_point();
+        let proj_w_pts = proj_w / ppp;
+        let proj_h_pts = proj_h / ppp;
+
         let canvas_rect = if is_preview {
             // Preview mode: use workspace zoom/offset
             self.handle_canvas_input(ui, available_rect);
@@ -211,14 +215,14 @@ impl EditorState {
                 let fit_w = available_rect.width() - padding * 2.0;
                 let fit_h = available_rect.height() - padding * 2.0;
 
-                let scale_w = fit_w / proj_w;
-                let scale_h = fit_h / proj_h;
-                self.canvas_zoom = scale_w.min(scale_h).min(1.0);
+                let scale_w = fit_w / proj_w_pts;
+                let scale_h = fit_h / proj_h_pts;
+                self.canvas_zoom = scale_w.min(scale_h).min(1.0).max(0.25);
                 self.canvas_offset = egui::Vec2::ZERO;
             }
 
-            let canvas_w = proj_w * self.canvas_zoom;
-            let canvas_h = proj_h * self.canvas_zoom;
+            let canvas_w = proj_w_pts * self.canvas_zoom;
+            let canvas_h = proj_h_pts * self.canvas_zoom;
 
             egui::Rect::from_center_size(
                 available_rect.center() + self.canvas_offset,
@@ -229,13 +233,13 @@ impl EditorState {
             let fit_w = available_rect.width();
             let fit_h = available_rect.height();
 
-            let scale_w = fit_w / proj_w;
-            let scale_h = fit_h / proj_h;
+            let scale_w = fit_w / proj_w_pts;
+            let scale_h = fit_h / proj_h_pts;
             let scale = scale_w.min(scale_h);
 
             egui::Rect::from_center_size(
                 available_rect.center(),
-                egui::vec2(proj_w * scale, proj_h * scale),
+                egui::vec2(proj_w_pts * scale, proj_h_pts * scale),
             )
         };
 
@@ -249,9 +253,6 @@ impl EditorState {
             ui.painter().rect_filled(shadow_rect, 0.0, egui::Color32::from_black_alpha(40));
             ui.painter().rect_stroke(canvas_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
         }
-
-        // --- 4. DRAW CHECKERBOARD (Always for visual accuracy) ---
-        self.draw_checkerboard(ui, canvas_rect);
 
         // --- 5. RENDER CONTENT ---
         self.render_content(ui, canvas_rect);
@@ -296,9 +297,27 @@ impl EditorState {
     }
 
     fn render_content(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        // 1. Resolve base zoom from the current frame
+        let base_zoom = self.map.parameter_cache
+            .get("Zoom")
+            .map(|c| c.value.as_float())
+            .unwrap_or(10.0);
+
+        // 2. Calculate the UI scale relative to pixels_per_point
+        // This ensures the map looks the same regardless of system DPI scaling.
+        let ppp = ui.ctx().pixels_per_point();
+        let proj_w_pts = self.settings.resolution[0] as f32 / ppp;
+        let scale = rect.width() / proj_w_pts;
         
-        self.map.ui(&mut canvas_ui);
+        // 3. Compensate zoom: Zoom_eff = Zoom_base + log2(scale)
+        // We clamp to 0.0 because Zoom 0 is the physical tile limit for the world.
+        let target_zoom = (base_zoom + scale.log2() as f64).max(0.0);
+
+        // 4. Draw Content (Checkerboard + Map)
+        self.draw_checkerboard(ui, rect);
+
+        let mut canvas_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        self.map.ui(&mut canvas_ui, target_zoom, scale);
 
         // Effects (Dissolve / Wipe) relative to rect
         let dissolve = self
@@ -350,7 +369,7 @@ impl EditorState {
         let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll_delta != 0.0 {
             let zoom_factor = (scroll_delta / 200.0).exp();
-            let new_zoom = (self.canvas_zoom * zoom_factor).clamp(0.01, 10.0);
+            let new_zoom = (self.canvas_zoom * zoom_factor).clamp(0.25, 10.0);
             
             if (new_zoom - self.canvas_zoom).abs() > 0.0001 {
                 // Adjust offset so we zoom toward the pointer

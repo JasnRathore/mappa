@@ -12,6 +12,7 @@ const MIN_RING_POINT_DISTANCE: f32 = 0.5;
 pub struct MapHighlightPlugin<'a> {
     pub current_frame: u32,
     pub track: &'a Track,
+    pub scale: f32,
 }
 
 impl<'a> Plugin for MapHighlightPlugin<'a> {
@@ -24,7 +25,7 @@ impl<'a> Plugin for MapHighlightPlugin<'a> {
     ) {
         let painter = ui.painter();
         let zoom = map_memory.zoom() as f32;
-        let outline_width = (1.2 + zoom * 0.18).clamp(1.5, 5.0);
+        let outline_width = (1.2 + (zoom - self.scale.log2()) * 0.18).clamp(1.5, 5.0) * self.scale;
         let scanline_step = fill_scanline_step(zoom);
 
         for obj_track in &self.track.object_tracks {

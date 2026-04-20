@@ -149,15 +149,8 @@ impl MapEngine {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, actual_zoom: f64, render_scale: f32) {
         // update() is now handled by the parent MyApp to synchronize caching.
-
-        // Reactive Lookup: Always pull from cache unless re-solve is needed
-        let _zoom = self
-            .parameter_cache
-            .get("Zoom")
-            .map(|c| c.value.as_float())
-            .unwrap_or(10.0);
 
         let center = self
             .parameter_cache
@@ -165,22 +158,14 @@ impl MapEngine {
             .map(|c| c.value.as_pos())
             .unwrap_or(Position::new(0.0, 20.0));
 
-        let _bearing = self
-            .parameter_cache
-            .get("Bearing")
-            .map(|c| c.value.as_float())
-            .unwrap_or(0.0);
-
-        let _pitch = self
-            .parameter_cache
-            .get("Pitch")
-            .map(|c| c.value.as_float())
-            .unwrap_or(0.0);
+        // Sync the map state
+        let _ = self.map_memory.set_zoom(actual_zoom);
 
         let map = Map::new(Some(&mut self.tiles), &mut self.map_memory, center).with_plugin(
             crate::map_plugin::MapHighlightPlugin {
                 current_frame: self.current_frame,
                 track: &self.track,
+                scale: render_scale,
             },
         );
         ui.add(map);
