@@ -75,7 +75,6 @@ enum InspectorTab {
     Camera,
     Inspector,
 }
-
 struct EditorState {
     map: engine::MapEngine,
     graph_editor: ui_graph::GraphEditor,
@@ -88,6 +87,43 @@ struct EditorState {
     selected_clip: Option<(usize, usize)>,
     inspector_tab: InspectorTab,
     selected_clip_channel: Option<String>,
+    show_render_window: bool,
+}
+
+impl EditorState {
+    fn render_view(&mut self, ui: &mut egui::Ui) {
+        let dissolve = self
+            .map
+            .parameter_cache
+            .get("Dissolve")
+            .map(|c| c.value.as_float())
+            .unwrap_or(0.0);
+
+        let wipe = self
+            .map
+            .parameter_cache
+            .get("Wipe")
+            .map(|c| c.value.as_float())
+            .unwrap_or(1.0);
+
+        let rect = ui.max_rect();
+        let wipe_width = rect.width() * wipe as f32;
+        let wipe_rect = egui::Rect::from_min_max(
+            rect.min,
+            rect.min + egui::vec2(wipe_width, rect.height()),
+        );
+
+        ui.set_clip_rect(wipe_rect);
+        self.map.ui(ui);
+
+        if dissolve > 0.0 {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::BLACK.linear_multiply(dissolve as f32),
+            );
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -175,6 +211,7 @@ impl MyApp {
             selected_clip: None,
             inspector_tab: InspectorTab::Camera,
             selected_clip_channel: None,
+            show_render_window: false,
         };
 
         Self {
@@ -216,6 +253,27 @@ impl eframe::App for MyApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
+        }
+
+        let mut close_requested = false;
+        if self.app_state == AppState::Editor && self.editor.show_render_window {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("render_window"),
+                egui::ViewportBuilder::default()
+                    .with_title("Render Window")
+                    .with_inner_size([1200.0, 700.0]),
+                |ctx, _class| {
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close_requested = true;
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        self.editor.render_view(ui);
+                    });
+                },
+            );
+        }
+        if close_requested {
+            self.editor.show_render_window = false;
         }
     }
 }
@@ -275,20 +333,6 @@ impl MyApp {
 
         editor.map.update();
 
-        let dissolve = editor
-            .map
-            .parameter_cache
-            .get("Dissolve")
-            .map(|c| c.value.as_float())
-            .unwrap_or(0.0);
-
-        let wipe = editor
-            .map
-            .parameter_cache
-            .get("Wipe")
-            .map(|c| c.value.as_float())
-            .unwrap_or(1.0);
-
         if editor.map.is_playing {
             ctx.request_repaint();
         }
@@ -315,7 +359,11 @@ impl MyApp {
                 });
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut editor.show_graph, "Graph Editor");
+                    ui.checkbox(&mut editor.show_render_window, "Render Window");
                 });
+                if ui.button("Render").clicked() {
+                    editor.show_render_window = true;
+                }
             });
         });
 
@@ -801,23 +849,7 @@ impl MyApp {
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            let rect = ui.max_rect();
-            let wipe_width = rect.width() * wipe as f32;
-            let wipe_rect = egui::Rect::from_min_max(
-                rect.min,
-                rect.min + egui::vec2(wipe_width, rect.height()),
-            );
-
-            ui.set_clip_rect(wipe_rect);
-            editor.map.ui(ui);
-
-            if dissolve > 0.0 {
-                ui.painter().rect_filled(
-                    rect,
-                    0.0,
-                    egui::Color32::BLACK.linear_multiply(dissolve as f32),
-                );
-            }
+            editor.render_view(ui);
         });
     }
 }
