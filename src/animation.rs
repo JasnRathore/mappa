@@ -306,6 +306,7 @@ fn set_ramp(clip: &mut Clip, name: &str, from: f64, to: f64, dur: u32, interp: I
     ch.insert_keyframe(kf(dur, to, Interpolation::Linear));
 }
 
+#[derive(Clone)]
 pub struct ObjectTrack {
     pub name: String,
     pub clips: Vec<Clip>,
