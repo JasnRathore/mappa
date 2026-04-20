@@ -144,6 +144,22 @@ enum InspectorTab {
     Inspector,
 }
 
+#[derive(Clone)]
+struct RenderJob {
+    name: String,
+    status: String,
+    progress: f32,
+}
+
+#[derive(Clone)]
+struct RenderSettings {
+    format: String,
+    codec: String,
+    resolution: [u32; 2],
+    fps: f32,
+    custom_name: String,
+}
+
 struct EditorState {
     map: engine::MapEngine,
     graph_editor: ui_graph::GraphEditor,
@@ -161,60 +177,76 @@ struct EditorState {
     canvas_zoom: f32,
     canvas_offset: egui::Vec2,
     canvas_fit_to_screen: bool,
+    render_settings: RenderSettings,
+    render_queue: Vec<RenderJob>,
 }
 
 impl EditorState {
     fn render_view(&mut self, ui: &mut egui::Ui, is_preview: bool) {
         let available_rect = ui.max_rect();
         
-        if is_preview {
-            // --- 1. HANDLE CANVAS INTERACTIONS ---
-            self.handle_canvas_input(ui, available_rect);
+        // --- 1. ASPECT CALCULATION ---
+        let proj_w = self.settings.resolution[0] as f32;
+        let proj_h = self.settings.resolution[1] as f32;
+        let aspect = proj_w / proj_h;
 
-            // --- 2. CALCULATE CANVAS RECT ---
-            let mut canvas_w = self.settings.resolution[0] as f32;
-            let mut canvas_h = self.settings.resolution[1] as f32;
+        let canvas_rect = if is_preview {
+            // Preview mode: use workspace zoom/offset
+            self.handle_canvas_input(ui, available_rect);
 
             if self.canvas_fit_to_screen {
                 let padding = 40.0;
                 let fit_w = available_rect.width() - padding * 2.0;
                 let fit_h = available_rect.height() - padding * 2.0;
 
-                let scale_w = fit_w / canvas_w;
-                let scale_h = fit_h / canvas_h;
+                let scale_w = fit_w / proj_w;
+                let scale_h = fit_h / proj_h;
                 self.canvas_zoom = scale_w.min(scale_h).min(1.0);
-                
-                // Re-center when fitting
                 self.canvas_offset = egui::Vec2::ZERO;
             }
 
-            canvas_w *= self.canvas_zoom;
-            canvas_h *= self.canvas_zoom;
+            let canvas_w = proj_w * self.canvas_zoom;
+            let canvas_h = proj_h * self.canvas_zoom;
 
-            let canvas_rect = egui::Rect::from_center_size(
+            egui::Rect::from_center_size(
                 available_rect.center() + self.canvas_offset,
                 egui::vec2(canvas_w, canvas_h),
-            );
+            )
+        } else {
+            // Clean render mode: always fit to window, no offset
+            let fit_w = available_rect.width();
+            let fit_h = available_rect.height();
 
-            // --- 3. DRAW WORKSPACE BACKGROUND ---
-            ui.painter().rect_filled(available_rect, 0.0, crate::theme::BG_PANEL);
+            let scale_w = fit_w / proj_w;
+            let scale_h = fit_h / proj_h;
+            let scale = scale_w.min(scale_h);
 
-            // --- 4. DRAW CANVAS SHADOW & BORDER ---
+            egui::Rect::from_center_size(
+                available_rect.center(),
+                egui::vec2(proj_w * scale, proj_h * scale),
+            )
+        };
+
+        // --- 2. DRAW BACKGROUND ---
+        let bg_color = if is_preview { crate::theme::BG_PANEL } else { egui::Color32::BLACK };
+        ui.painter().rect_filled(available_rect, 0.0, bg_color);
+
+        // --- 3. DRAW CANVAS DECORATIONS (Preview ONLY) ---
+        if is_preview {
             let shadow_rect = canvas_rect.expand(4.0);
             ui.painter().rect_filled(shadow_rect, 0.0, egui::Color32::from_black_alpha(40));
             ui.painter().rect_stroke(canvas_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_gray(80)), egui::StrokeKind::Outside);
+        }
 
-            // --- 5. DRAW CHECKERBOARD ---
-            self.draw_checkerboard(ui, canvas_rect);
+        // --- 4. DRAW CHECKERBOARD (Always for visual accuracy) ---
+        self.draw_checkerboard(ui, canvas_rect);
 
-            // --- 6. RENDER CONTENT ---
-            self.render_content(ui, canvas_rect);
+        // --- 5. RENDER CONTENT ---
+        self.render_content(ui, canvas_rect);
 
-            // --- 7. DRAW HUD (STATUS BAR) ---
+        // --- 6. DRAW HUD (Preview ONLY) ---
+        if is_preview {
             self.draw_canvas_hud(ui, canvas_rect);
-        } else {
-            // "Clean" mode: Just render content to the available rect
-            self.render_content(ui, available_rect);
         }
     }
 
@@ -341,6 +373,125 @@ impl EditorState {
             egui::Color32::from_gray(120)
         );
     }
+
+    fn ui_render_settings(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.add_space(10.0);
+            ui.heading("RENDER SETTINGS");
+            ui.add_space(15.0);
+
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("FILE NAME").size(11.0).color(crate::theme::TEXT_MUTED));
+                ui.text_edit_singleline(&mut self.render_settings.custom_name);
+            });
+
+            ui.add_space(10.0);
+
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("FORMAT & CODEC").size(11.0).color(crate::theme::TEXT_MUTED));
+                
+                ui.horizontal(|ui| {
+                    ui.label("Format:");
+                    egui::ComboBox::from_id_salt("fmt")
+                        .selected_text(&self.render_settings.format)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.render_settings.format, "MP4".to_string(), "MP4");
+                            ui.selectable_value(&mut self.render_settings.format, "MOV".to_string(), "MOV");
+                            ui.selectable_value(&mut self.render_settings.format, "PNG SEQ".to_string(), "PNG SEQ");
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Codec:");
+                    egui::ComboBox::from_id_salt("codec")
+                        .selected_text(&self.render_settings.codec)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.render_settings.codec, "H.264".to_string(), "H.264");
+                            ui.selectable_value(&mut self.render_settings.codec, "H.265".to_string(), "H.265");
+                            ui.selectable_value(&mut self.render_settings.codec, "ProRes 422".to_string(), "ProRes 422");
+                        });
+                });
+            });
+
+            ui.add_space(10.0);
+
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("RESOLUTION & FPS").size(11.0).color(crate::theme::TEXT_MUTED));
+                
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut self.render_settings.resolution[0]).speed(1));
+                    ui.label("x");
+                    ui.add(egui::DragValue::new(&mut self.render_settings.resolution[1]).speed(1));
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("FPS:");
+                    ui.add(egui::DragValue::new(&mut self.render_settings.fps).speed(0.1));
+                });
+            });
+
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.add_space(10.0);
+                if ui.add_sized([ui.available_width(), 32.0], 
+                    egui::Button::new(egui::RichText::new("ADD TO RENDER QUEUE").strong())
+                        .fill(crate::theme::PRIMARY))
+                    .clicked() 
+                {
+                    self.render_queue.push(RenderJob {
+                        name: self.render_settings.custom_name.clone(),
+                        status: "Ready".to_string(),
+                        progress: 0.0,
+                    });
+                }
+            });
+        });
+    }
+
+    fn ui_render_queue(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.add_space(10.0);
+            ui.heading("RENDER QUEUE");
+            ui.add_space(15.0);
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (idx, job) in self.render_queue.iter().enumerate() {
+                    ui.group(|ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&job.name).strong());
+                                ui.label(egui::RichText::new(&job.status).size(10.0).color(egui::Color32::from_rgb(0, 200, 0)));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("❌").clicked() {
+                                    // Handle removal in next loop or with retain
+                                }
+                            });
+                        });
+                        
+                        if job.progress > 0.0 {
+                            ui.add(egui::ProgressBar::new(job.progress).show_percentage());
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+            });
+
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.add_space(10.0);
+                if ui.add_sized([ui.available_width(), 40.0], 
+                    egui::Button::new(egui::RichText::new("🚀 RENDER ALL").strong())
+                        .fill(egui::Color32::from_rgb(0, 120, 0)))
+                    .clicked() 
+                {
+                    // Start render logic
+                }
+            });
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -442,6 +593,16 @@ impl MyApp {
             canvas_zoom: 1.0,
             canvas_offset: egui::Vec2::ZERO,
             canvas_fit_to_screen: true,
+            render_settings: RenderSettings {
+                format: "MP4".to_string(),
+                codec: "H.264".to_string(),
+                resolution: settings.resolution,
+                fps: settings.fps,
+                custom_name: settings.name.clone(),
+            },
+            render_queue: vec![
+                RenderJob { name: "Job 1".to_string(), status: "Ready".to_string(), progress: 0.0 },
+            ],
         };
         editor_state.map.fps = settings.fps;
 
@@ -523,7 +684,26 @@ impl eframe::App for MyApp {
                     if ctx.input(|i| i.viewport().close_requested()) {
                         close_requested = true;
                     }
+                    
+                    // --- RENDER WORKSPACE LAYOUT ---
+                    egui::SidePanel::left("render_settings")
+                        .resizable(true)
+                        .default_width(280.0)
+                        .min_width(200.0)
+                        .show(ctx, |ui| {
+                            self.editor.ui_render_settings(ui);
+                        });
+
+                    egui::SidePanel::right("render_queue")
+                        .resizable(true)
+                        .default_width(240.0)
+                        .min_width(180.0)
+                        .show(ctx, |ui| {
+                            self.editor.ui_render_queue(ui);
+                        });
+
                     egui::CentralPanel::default().show(ctx, |ui| {
+                        // The viewer in render window is "clean" but centered in available area
                         self.editor.render_view(ui, false);
                     });
                 },
