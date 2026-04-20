@@ -12,7 +12,7 @@ mod transitions;
 mod ui_graph;
 
 use crate::animation::{ClipPreset, apply_clip_preset};
-use components::{keyframe_button, timeline::Timeline};
+use components::{button::keyframe_button, timeline::Timeline};
 use engine::MapEngine;
 use ui_graph::GraphEditor;
 
