@@ -14,18 +14,60 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 fn main() -> Result<(), eframe::Error> {
+    let args: Vec<String> = std::env::args().collect();
+    let controller = AppController {
+        command: Arc::new(Mutex::new(None)),
+    };
+
+    if args.contains(&"--editor".to_string()) {
+        run_editor(controller.clone());
+    } else {
+        run_project_manager(controller.clone());
+    }
+
+    Ok(())
+}
+
+fn run_project_manager(controller: AppController) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
-            .with_title("Mappar - Project Manager"),
+            .with_title("Project Manager"),
         ..Default::default()
     };
 
-    eframe::run_native(
-        "Mappar",
+    let _ = eframe::run_native(
+        "Project Manager",
         options,
-        Box::new(|cc| Ok(Box::new(MyApp::new(cc)))),
-    )
+        Box::new(|cc| {
+            Ok(Box::new(MyApp::new(
+                cc,
+                controller.clone(),
+                AppState::ProjectManager,
+            )))
+        }),
+    );
+}
+
+fn run_editor(controller: AppController) {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1200.0, 800.0])
+            .with_title("Editor"),
+        ..Default::default()
+    };
+
+    let _ = eframe::run_native(
+        "Editor",
+        options,
+        Box::new(|cc| {
+            Ok(Box::new(MyApp::new(
+                cc,
+                controller.clone(),
+                AppState::Editor,
+            )))
+        }),
+    );
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -48,10 +90,24 @@ struct EditorState {
     selected_clip_channel: Option<String>,
 }
 
+#[derive(Clone)]
+struct AppController {
+    command: Arc<Mutex<Option<AppCommand>>>,
+}
+
+#[derive(Clone)]
+enum AppCommand {
+    OpenEditor,
+    OpenProjectManager,
+    CloseSelf,
+}
 struct MyApp {
+    controller: AppController,
     app_state: AppState,
+
     project_manager: project_manager::ProjectManager,
     editor: EditorState,
+
     new_project_name: String,
     show_new_project_dialog: bool,
 }
@@ -63,7 +119,11 @@ enum AppState {
 }
 
 impl MyApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        controller: AppController,
+        initial_state: AppState,
+    ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "dm_sans".to_owned(),
@@ -118,7 +178,8 @@ impl MyApp {
         };
 
         Self {
-            app_state: AppState::ProjectManager,
+            controller,
+            app_state: initial_state,
             project_manager: project_manager::ProjectManager::new(),
             editor: editor_state,
             new_project_name: String::new(),
@@ -133,6 +194,29 @@ impl eframe::App for MyApp {
             AppState::ProjectManager => self.ui_project_manager(ui),
             AppState::Editor => self.ui_editor(ui, frame),
         }
+        let ctx = ui.ctx();
+        if let Some(cmd) = self.controller.command.lock().unwrap().take() {
+            match cmd {
+                AppCommand::OpenEditor => {
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .arg("--editor")
+                        .spawn()
+                        .unwrap();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+
+                AppCommand::OpenProjectManager => {
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .arg("--pm")
+                        .spawn()
+                        .unwrap();
+                }
+
+                AppCommand::CloseSelf => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
     }
 }
 
@@ -143,7 +227,7 @@ impl MyApp {
                 match action {
                     project_manager::ProjectAction::Open(project_idx) => {
                         if let Ok(_path) = self.project_manager.open_project(project_idx) {
-                            self.app_state = AppState::Editor;
+                            *self.controller.command.lock().unwrap() = Some(AppCommand::OpenEditor);
                         }
                     }
                     project_manager::ProjectAction::NewProject => {
@@ -236,7 +320,7 @@ impl MyApp {
         });
 
         if back_to_projects {
-            self.app_state = AppState::ProjectManager;
+            *self.controller.command.lock().unwrap() = Some(AppCommand::OpenProjectManager);
             return;
         }
 
