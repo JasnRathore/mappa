@@ -20,6 +20,7 @@ pub struct MapEngine {
     pub accumulator: f64,
     pub last_evaluated_frame: Option<u32>,
     pub parameter_cache: HashMap<String, ParameterCache>,
+    pub fps: f32,
 }
 
 impl MapEngine {
@@ -80,6 +81,7 @@ impl MapEngine {
             accumulator: 0.0,
             last_evaluated_frame: None,
             parameter_cache: HashMap::new(),
+            fps: 30.0,
         }
     }
 
@@ -95,7 +97,7 @@ impl MapEngine {
             self.last_update = Some(now);
 
             self.accumulator += dt;
-            let frame_time = 1.0 / 30.0; // 30 FPS
+            let frame_time = 1.0 / self.fps as f64;
 
             while self.accumulator >= frame_time {
                 self.current_frame += 1;

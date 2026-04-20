@@ -19,8 +19,10 @@ fn main() -> Result<(), eframe::Error> {
         command: Arc::new(Mutex::new(None)),
     };
 
-    if args.contains(&"--editor".to_string()) {
-        run_editor(controller.clone());
+    if let Some(project_path) = args.iter().position(|a| a == "--project").and_then(|i| args.get(i + 1)) {
+        run_editor(controller.clone(), Some(std::path::PathBuf::from(project_path)));
+    } else if args.contains(&"--editor".to_string()) {
+        run_editor(controller.clone(), None);
     } else {
         run_project_manager(controller.clone());
     }
@@ -44,27 +46,54 @@ fn run_project_manager(controller: AppController) {
                 cc,
                 controller.clone(),
                 AppState::ProjectManager,
+                project_manager::ProjectSettings::default(),
             )))
         }),
     );
 }
 
-fn run_editor(controller: AppController) {
+fn run_editor(controller: AppController, project_path: Option<std::path::PathBuf>) {
+    let settings = if let Some(path) = &project_path {
+        let settings_path = path.join("project.json");
+        if settings_path.exists() {
+            let s = std::fs::read_to_string(settings_path).unwrap_or_default();
+            serde_json::from_str::<project_manager::ProjectSettings>(&s).unwrap_or_else(|_| project_manager::ProjectSettings {
+                name: path.file_name().and_then(|n| n.to_str()).unwrap_or("Editor").to_string(),
+                ..Default::default()
+            })
+        } else {
+            project_manager::ProjectSettings {
+                name: path.file_name().and_then(|n| n.to_str()).unwrap_or("Editor").to_string(),
+                ..Default::default()
+            }
+        }
+    } else {
+        project_manager::ProjectSettings::default()
+    };
+
+    let title = format!("Mappar - {}", settings.name);
+    // Aspect ratio: resolution[0] / resolution[1]
+    // We want a window that is roughly 1200px wide.
+    let aspect = settings.resolution[0] as f32 / settings.resolution[1] as f32;
+    let width = 1200.0;
+    let height = width / aspect;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_title("Editor"),
+            .with_inner_size([width, height])
+            .with_title(&title),
         ..Default::default()
     };
 
     let _ = eframe::run_native(
-        "Editor",
+        &title,
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             Ok(Box::new(MyApp::new(
                 cc,
                 controller.clone(),
                 AppState::Editor,
+                settings,
             )))
         }),
     );
@@ -75,6 +104,7 @@ enum InspectorTab {
     Camera,
     Inspector,
 }
+
 struct EditorState {
     map: engine::MapEngine,
     graph_editor: ui_graph::GraphEditor,
@@ -88,6 +118,7 @@ struct EditorState {
     inspector_tab: InspectorTab,
     selected_clip_channel: Option<String>,
     show_render_window: bool,
+    settings: project_manager::ProjectSettings,
 }
 
 impl EditorState {
@@ -133,10 +164,11 @@ struct AppController {
 
 #[derive(Clone)]
 enum AppCommand {
-    OpenEditor,
+    OpenEditor(std::path::PathBuf),
     OpenProjectManager,
     CloseSelf,
 }
+
 struct MyApp {
     controller: AppController,
     app_state: AppState,
@@ -145,7 +177,13 @@ struct MyApp {
     editor: EditorState,
 
     new_project_name: String,
+    new_project_fps: f32,
+    new_project_resolution: [u32; 2],
     show_new_project_dialog: bool,
+
+    renaming_project_idx: Option<usize>,
+    rename_temp_name: String,
+    deleting_project_idx: Option<usize>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -159,6 +197,7 @@ impl MyApp {
         cc: &eframe::CreationContext<'_>,
         controller: AppController,
         initial_state: AppState,
+        settings: project_manager::ProjectSettings,
     ) -> Self {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -199,7 +238,7 @@ impl MyApp {
         cc.egui_ctx.set_fonts(fonts);
         theme::apply(&cc.egui_ctx);
 
-        let editor_state = EditorState {
+        let mut editor_state = EditorState {
             map: engine::MapEngine::new(cc),
             graph_editor: ui_graph::GraphEditor::new(),
             timeline: components::timeline::Timeline::new(),
@@ -212,7 +251,9 @@ impl MyApp {
             inspector_tab: InspectorTab::Camera,
             selected_clip_channel: None,
             show_render_window: false,
+            settings: settings.clone(),
         };
+        editor_state.map.fps = settings.fps;
 
         Self {
             controller,
@@ -220,7 +261,12 @@ impl MyApp {
             project_manager: project_manager::ProjectManager::new(),
             editor: editor_state,
             new_project_name: String::new(),
+            new_project_fps: 30.0,
+            new_project_resolution: [1920, 1080],
             show_new_project_dialog: false,
+            renaming_project_idx: None,
+            rename_temp_name: String::new(),
+            deleting_project_idx: None,
         }
     }
 }
@@ -234,9 +280,11 @@ impl eframe::App for MyApp {
         let ctx = ui.ctx();
         if let Some(cmd) = self.controller.command.lock().unwrap().take() {
             match cmd {
-                AppCommand::OpenEditor => {
+                AppCommand::OpenEditor(path) => {
                     std::process::Command::new(std::env::current_exe().unwrap())
                         .arg("--editor")
+                        .arg("--project")
+                        .arg(path)
                         .spawn()
                         .unwrap();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -284,12 +332,20 @@ impl MyApp {
             if let Some(action) = self.project_manager.ui(ui) {
                 match action {
                     project_manager::ProjectAction::Open(project_idx) => {
-                        if let Ok(_path) = self.project_manager.open_project(project_idx) {
-                            *self.controller.command.lock().unwrap() = Some(AppCommand::OpenEditor);
+                        if let Ok(path) = self.project_manager.open_project(project_idx) {
+                            *self.controller.command.lock().unwrap() =
+                                Some(AppCommand::OpenEditor(path));
                         }
                     }
                     project_manager::ProjectAction::NewProject => {
                         self.show_new_project_dialog = true;
+                    }
+                    project_manager::ProjectAction::Delete(idx) => {
+                        self.deleting_project_idx = Some(idx);
+                    }
+                    project_manager::ProjectAction::Rename(idx) => {
+                        self.renaming_project_idx = Some(idx);
+                        self.rename_temp_name = self.project_manager.projects[idx].name.clone();
                     }
                 }
             }
@@ -307,13 +363,39 @@ impl MyApp {
                     });
 
                     ui.horizontal(|ui| {
+                        ui.label("Resolution:");
+                        ui.add(egui::DragValue::new(&mut self.new_project_resolution[0]).speed(1));
+                        ui.label("x");
+                        ui.add(egui::DragValue::new(&mut self.new_project_resolution[1]).speed(1));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("FPS:");
+                        ui.add(egui::DragValue::new(&mut self.new_project_fps).speed(1));
+                    });
+
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
                         if ui.button("Create").clicked() && !self.new_project_name.is_empty() {
-                            if let Ok(_) =
+                            if let Ok(path) =
                                 self.project_manager.create_project(&self.new_project_name)
                             {
+                                // Update project.json with the specified settings
+                                let settings = project_manager::ProjectSettings {
+                                    name: self.new_project_name.clone(),
+                                    resolution: self.new_project_resolution,
+                                    fps: self.new_project_fps,
+                                };
+                                let settings_json = serde_json::to_string_pretty(&settings).unwrap();
+                                let _ = std::fs::write(path.join("project.json"), settings_json);
+
                                 self.new_project_name.clear();
                                 self.show_new_project_dialog = false;
-                                self.app_state = AppState::Editor;
+                                
+                                // Open the newly created project
+                                *self.controller.command.lock().unwrap() =
+                                    Some(AppCommand::OpenEditor(path));
                             }
                         }
                         if ui.button("Cancel").clicked() {
@@ -323,6 +405,57 @@ impl MyApp {
                     });
                 });
             self.show_new_project_dialog = open;
+        }
+
+        if let Some(idx) = self.renaming_project_idx {
+            let mut open = true;
+            egui::Window::new("Rename Project")
+                .open(&mut open)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("New Name:");
+                        ui.text_edit_singleline(&mut self.rename_temp_name);
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Rename").clicked() && !self.rename_temp_name.is_empty() {
+                            let _ = self.project_manager.rename_project(idx, self.rename_temp_name.clone());
+                            self.renaming_project_idx = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.renaming_project_idx = None;
+                        }
+                    });
+                });
+            if !open {
+                self.renaming_project_idx = None;
+            }
+        }
+
+        if let Some(idx) = self.deleting_project_idx {
+            let mut open = true;
+            let project_name = self.project_manager.projects[idx].name.clone();
+            egui::Window::new("Delete Project")
+                .open(&mut open)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("Are you sure you want to delete '{}'?", project_name));
+                    ui.label("This will permanently remove the project folder.");
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("🗑 Yes, Delete").clicked() {
+                            let _ = self.project_manager.delete_project(idx);
+                            self.deleting_project_idx = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.deleting_project_idx = None;
+                        }
+                    });
+                });
+            if !open {
+                self.deleting_project_idx = None;
+            }
         }
     }
 

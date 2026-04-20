@@ -3,16 +3,36 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProjectSettings {
+    pub name: String,
+    pub resolution: [u32; 2],
+    pub fps: f32,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            name: "New Project".to_string(),
+            resolution: [1920, 1080],
+            fps: 30.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     pub path: PathBuf,
     pub last_modified: String,
+    pub settings: ProjectSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProjectAction {
     Open(usize),
     NewProject,
+    Delete(usize),
+    Rename(usize),
 }
 
 pub enum ProjectTab {
@@ -51,19 +71,42 @@ impl ProjectManager {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        let last_modified = entry
-                            .metadata()
-                            .and_then(|m| m.modified())
-                            .map(|t| format!("{:?}", t))
-                            .unwrap_or_default();
+                    let settings_path = path.join("project.json");
+                    let settings = if settings_path.exists() {
+                        fs::read_to_string(&settings_path)
+                            .ok()
+                            .and_then(|s| serde_json::from_str::<ProjectSettings>(&s).ok())
+                            .unwrap_or_else(|| ProjectSettings {
+                                name: path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string(),
+                                ..Default::default()
+                            })
+                    } else {
+                        ProjectSettings {
+                            name: path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("Unknown")
+                                .to_string(),
+                            ..Default::default()
+                        }
+                    };
 
-                        self.projects.push(Project {
-                            name: name.to_string(),
-                            path: path.clone(),
-                            last_modified,
-                        });
-                    }
+                    let last_modified = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .map(|t| format!("{:?}", t))
+                        .unwrap_or_default();
+
+                    self.projects.push(Project {
+                        name: settings.name.clone(),
+                        path: path.clone(),
+                        last_modified,
+                        settings,
+                    });
                 }
             }
         }
@@ -79,10 +122,20 @@ impl ProjectManager {
         fs::create_dir_all(&project_path)
             .map_err(|e| format!("Failed to create project: {}", e))?;
 
+        let settings = ProjectSettings {
+            name: name.to_string(),
+            ..Default::default()
+        };
+
+        let settings_json = serde_json::to_string_pretty(&settings).unwrap();
+        fs::write(project_path.join("project.json"), settings_json)
+            .map_err(|e| format!("Failed to write project settings: {}", e))?;
+
         let project = Project {
             name: name.to_string(),
             path: project_path.clone(),
             last_modified: String::from("now"),
+            settings,
         };
 
         self.projects.push(project);
@@ -102,10 +155,44 @@ impl ProjectManager {
         }
 
         let project = &self.projects[index];
-        fs::remove_dir_all(&project.path)
-            .map_err(|e| format!("Failed to delete project: {}", e))?;
+        if project.path.exists() {
+            fs::remove_dir_all(&project.path)
+                .map_err(|e| format!("Failed to delete project: {}", e))?;
+        }
 
         self.projects.remove(index);
+        Ok(())
+    }
+
+    pub fn rename_project(&mut self, index: usize, new_name: String) -> Result<(), String> {
+        if index >= self.projects.len() {
+            return Err("Invalid project index".to_string());
+        }
+
+        let project = &mut self.projects[index];
+        let old_path = project.path.clone();
+        let new_path = old_path.parent().unwrap().join(&new_name);
+
+        if new_path.exists() {
+            return Err("A project with that name already exists".to_string());
+        }
+
+        // 1. Rename the directory
+        fs::rename(&old_path, &new_path)
+            .map_err(|e| format!("Failed to rename project directory: {}", e))?;
+
+        // 2. Update project.json
+        let mut settings = project.settings.clone();
+        settings.name = new_name.clone();
+        let settings_json = serde_json::to_string_pretty(&settings).unwrap();
+        fs::write(new_path.join("project.json"), settings_json)
+            .map_err(|e| format!("Failed to update project settings: {}", e))?;
+
+        // 3. Update internal state
+        project.name = new_name;
+        project.path = new_path;
+        project.settings = settings;
+
         Ok(())
     }
 
@@ -167,9 +254,14 @@ impl ProjectManager {
                         ui.spacing_mut().item_spacing = egui::vec2(20.0, 20.0);
 
                         for (idx, project) in self.projects.iter().enumerate() {
-                            if self.draw_project_card(ui, project, idx) {
-                                self.selected_project = Some(idx);
-                                action = Some(ProjectAction::Open(idx));
+                            if let Some(card_action) = self.draw_project_card(ui, project, idx) {
+                                match card_action {
+                                    ProjectAction::Open(_) => {
+                                        self.selected_project = Some(idx);
+                                        action = Some(card_action);
+                                    }
+                                    _ => action = Some(card_action),
+                                }
                             }
                         }
                     });
@@ -197,13 +289,23 @@ impl ProjectManager {
                         action = Some(ProjectAction::Open(idx));
                     }
                 }
+                if ui.button("🗑 Delete").clicked() {
+                    if let Some(idx) = self.selected_project {
+                        action = Some(ProjectAction::Delete(idx));
+                    }
+                }
             });
         });
 
         action
     }
 
-    fn draw_project_card(&self, ui: &mut egui::Ui, project: &Project, idx: usize) -> bool {
+    fn draw_project_card(
+        &self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        idx: usize,
+    ) -> Option<ProjectAction> {
         let is_selected = self.selected_project == Some(idx);
         let card_size = egui::vec2(220.0, 160.0);
 
@@ -268,10 +370,50 @@ impl ProjectManager {
             name_pos,
             egui::Align2::LEFT_TOP,
             &project.name,
-            egui::FontId::proportional(14.0),
+            egui::FontId::proportional(16.0),
             egui::Color32::WHITE,
         );
 
-        response.clicked()
+        // Subtitle (Res/FPS)
+        let sub_pos = rect.min + egui::vec2(12.0, 137.0);
+        let sub_text = format!(
+            "{}x{} @ {}fps",
+            project.settings.resolution[0], project.settings.resolution[1], project.settings.fps
+        );
+        ui.painter().text(
+            sub_pos,
+            egui::Align2::LEFT_TOP,
+            sub_text,
+            egui::FontId::proportional(11.0),
+            egui::Color32::from_gray(160),
+        );
+
+        // Context menu
+        let mut action = None;
+        response.context_menu(|ui| {
+            if ui.button("▶ Open").clicked() {
+                action = Some(ProjectAction::Open(idx));
+                ui.close_menu();
+            }
+            if ui.button("✏ Rename").clicked() {
+                action = Some(ProjectAction::Rename(idx));
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("🗑 Delete").clicked() {
+                action = Some(ProjectAction::Delete(idx));
+                ui.close_menu();
+            }
+        });
+
+        if action.is_some() {
+            return action;
+        }
+
+        if response.clicked() {
+            Some(ProjectAction::Open(idx))
+        } else {
+            None
+        }
     }
 }
