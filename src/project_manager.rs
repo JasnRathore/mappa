@@ -35,17 +35,10 @@ pub enum ProjectAction {
     Rename(usize),
 }
 
-pub enum ProjectTab {
-    Local,
-    Network,
-    Cloud,
-}
-
 pub struct ProjectManager {
     pub projects: Vec<Project>,
     pub projects_dir: PathBuf,
     pub selected_project: Option<usize>,
-    pub current_tab: ProjectTab,
 }
 
 impl ProjectManager {
@@ -55,7 +48,6 @@ impl ProjectManager {
             projects: Vec::new(),
             projects_dir,
             selected_project: None,
-            current_tab: ProjectTab::Local,
         };
         manager.load_projects();
         manager
@@ -200,44 +192,26 @@ impl ProjectManager {
         let mut action = None;
 
         // Header
-        ui.add_space(20.0);
-        ui.heading(egui::RichText::new("Projects").size(32.0));
-        ui.add_space(10.0);
-
-        // Tab navigation + New Project button in header (right-aligned)
+        ui.add_space(30.0);
         ui.horizontal(|ui| {
-            // Left: tabs
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(matches!(self.current_tab, ProjectTab::Local), "Local")
-                    .clicked()
-                {
-                    self.current_tab = ProjectTab::Local;
-                }
-                if ui
-                    .selectable_label(matches!(self.current_tab, ProjectTab::Network), "Network")
-                    .clicked()
-                {
-                    self.current_tab = ProjectTab::Network;
-                }
-                if ui
-                    .selectable_label(matches!(self.current_tab, ProjectTab::Cloud), "Cloud")
-                    .clicked()
-                {
-                    self.current_tab = ProjectTab::Cloud;
-                }
-            });
-
-            // Right: New Project button
+            ui.heading(
+                egui::RichText::new("PROJECTS")
+                    .size(20.0)
+                    .strong()
+                    .color(crate::theme::TEXT),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("➕ New Project").clicked() {
+                if ui
+                    .button(egui::RichText::new("➕ NEW PROJECT").strong())
+                    .clicked()
+                {
                     action = Some(ProjectAction::NewProject);
                 }
             });
         });
-
-        ui.separator();
         ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(20.0);
 
         // Project grid
         egui::ScrollArea::vertical()
@@ -313,33 +287,34 @@ impl ProjectManager {
 
         // Background
         let bg_color = if is_selected {
-            egui::Color32::from_rgb(220, 100, 20)
+            crate::theme::BG_HOVER
         } else if response.hovered() {
-            egui::Color32::from_gray(70)
+            crate::theme::BG_RAISED
         } else {
-            egui::Color32::from_gray(50)
+            crate::theme::BG_PANEL
         };
 
-        ui.painter().rect_filled(rect, 12.0, bg_color);
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::ZERO, bg_color);
 
         // Border for selected
         if is_selected {
             ui.painter().rect_stroke(
                 rect,
-                12.0,
+                0.0,
                 egui::Stroke {
-                    width: 3.0,
-                    color: egui::Color32::from_rgb(255, 165, 0),
+                    width: 2.0,
+                    color: crate::theme::PRIMARY,
                 },
                 egui::StrokeKind::Outside,
             );
         } else if response.hovered() {
             ui.painter().rect_stroke(
                 rect,
-                12.0,
+                0.0,
                 egui::Stroke {
                     width: 1.0,
-                    color: egui::Color32::from_gray(120),
+                    color: crate::theme::BORDER_FOCUS,
                 },
                 egui::StrokeKind::Outside,
             );

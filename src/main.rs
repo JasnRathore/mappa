@@ -353,80 +353,107 @@ impl MyApp {
 
         if self.show_new_project_dialog {
             let mut open = true;
-            egui::Window::new("New Project")
+            egui::Window::new("NEW PROJECT")
                 .open(&mut open)
                 .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Project Name:");
-                        ui.text_edit_singleline(&mut self.new_project_name);
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Resolution:");
-                        ui.add(egui::DragValue::new(&mut self.new_project_resolution[0]).speed(1));
-                        ui.label("x");
-                        ui.add(egui::DragValue::new(&mut self.new_project_resolution[1]).speed(1));
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("FPS:");
-                        ui.add(egui::DragValue::new(&mut self.new_project_fps).speed(1));
-                    });
-
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() && !self.new_project_name.is_empty() {
-                            if let Ok(path) =
-                                self.project_manager.create_project(&self.new_project_name)
-                            {
-                                // Update project.json with the specified settings
-                                let settings = project_manager::ProjectSettings {
-                                    name: self.new_project_name.clone(),
-                                    resolution: self.new_project_resolution,
-                                    fps: self.new_project_fps,
-                                };
-                                let settings_json = serde_json::to_string_pretty(&settings).unwrap();
-                                let _ = std::fs::write(path.join("project.json"), settings_json);
-
-                                self.new_project_name.clear();
-                                self.show_new_project_dialog = false;
+                    egui::Frame::NONE
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("PROJECT NAME").size(11.0).color(crate::theme::TEXT_MUTED));
+                                ui.add_space(4.0);
+                                ui.text_edit_singleline(&mut self.new_project_name);
                                 
-                                // Open the newly created project
-                                *self.controller.command.lock().unwrap() =
-                                    Some(AppCommand::OpenEditor(path));
-                            }
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.new_project_name.clear();
-                            self.show_new_project_dialog = false;
-                        }
-                    });
+                                ui.add_space(15.0);
+
+                                ui.label(egui::RichText::new("RESOLUTION").size(11.0).color(crate::theme::TEXT_MUTED));
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::DragValue::new(&mut self.new_project_resolution[0]).speed(1));
+                                    ui.label("x");
+                                    ui.add(egui::DragValue::new(&mut self.new_project_resolution[1]).speed(1));
+                                });
+
+                                ui.add_space(15.0);
+
+                                ui.label(egui::RichText::new("FPS").size(11.0).color(crate::theme::TEXT_MUTED));
+                                ui.add_space(4.0);
+                                ui.add(egui::DragValue::new(&mut self.new_project_fps).speed(1));
+
+                                ui.add_space(25.0);
+
+                                ui.horizontal(|ui| {
+                                    let btn_create = ui.add_sized(
+                                        [80.0, 24.0],
+                                        egui::Button::new(egui::RichText::new("CREATE").strong())
+                                            .fill(crate::theme::PRIMARY)
+                                            .stroke(egui::Stroke::NONE)
+                                    );
+                                    if btn_create.clicked() && !self.new_project_name.is_empty() {
+                                        if let Ok(path) = self.project_manager.create_project(&self.new_project_name) {
+                                            let settings = project_manager::ProjectSettings {
+                                                name: self.new_project_name.clone(),
+                                                resolution: self.new_project_resolution,
+                                                fps: self.new_project_fps,
+                                            };
+                                            let settings_json = serde_json::to_string_pretty(&settings).unwrap();
+                                            let _ = std::fs::write(path.join("project.json"), settings_json);
+
+                                            self.new_project_name.clear();
+                                            self.show_new_project_dialog = false;
+                                            *self.controller.command.lock().unwrap() = Some(AppCommand::OpenEditor(path));
+                                        }
+                                    }
+
+                                    if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
+                                        self.new_project_name.clear();
+                                        self.show_new_project_dialog = false;
+                                    }
+                                });
+                            });
+                        });
                 });
             self.show_new_project_dialog = open;
         }
 
         if let Some(idx) = self.renaming_project_idx {
             let mut open = true;
-            egui::Window::new("Rename Project")
+            egui::Window::new("RENAME PROJECT")
                 .open(&mut open)
                 .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("New Name:");
-                        ui.text_edit_singleline(&mut self.rename_temp_name);
-                    });
+                    egui::Frame::NONE
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("NEW NAME").size(11.0).color(crate::theme::TEXT_MUTED));
+                                ui.add_space(4.0);
+                                ui.text_edit_singleline(&mut self.rename_temp_name);
 
-                    ui.horizontal(|ui| {
-                        if ui.button("Rename").clicked() && !self.rename_temp_name.is_empty() {
-                            let _ = self.project_manager.rename_project(idx, self.rename_temp_name.clone());
-                            self.renaming_project_idx = None;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.renaming_project_idx = None;
-                        }
-                    });
+                                ui.add_space(20.0);
+
+                                ui.horizontal(|ui| {
+                                    let btn_rename = ui.add_sized(
+                                        [80.0, 24.0],
+                                        egui::Button::new(egui::RichText::new("RENAME").strong())
+                                            .fill(crate::theme::PRIMARY)
+                                            .stroke(egui::Stroke::NONE)
+                                    );
+                                    if btn_rename.clicked() && !self.rename_temp_name.is_empty() {
+                                        let _ = self.project_manager.rename_project(idx, self.rename_temp_name.clone());
+                                        self.renaming_project_idx = None;
+                                    }
+                                    if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
+                                        self.renaming_project_idx = None;
+                                    }
+                                });
+                            });
+                        });
                 });
             if !open {
                 self.renaming_project_idx = None;
@@ -436,22 +463,38 @@ impl MyApp {
         if let Some(idx) = self.deleting_project_idx {
             let mut open = true;
             let project_name = self.project_manager.projects[idx].name.clone();
-            egui::Window::new("Delete Project")
+            egui::Window::new("DELETE PROJECT")
                 .open(&mut open)
                 .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ui.ctx(), |ui| {
-                    ui.label(format!("Are you sure you want to delete '{}'?", project_name));
-                    ui.label("This will permanently remove the project folder.");
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("🗑 Yes, Delete").clicked() {
-                            let _ = self.project_manager.delete_project(idx);
-                            self.deleting_project_idx = None;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.deleting_project_idx = None;
-                        }
-                    });
+                    egui::Frame::NONE
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.label(format!("Are you sure you want to delete '{}'?", project_name));
+                                ui.label(egui::RichText::new("This action cannot be undone.").size(12.0).color(crate::theme::DESTRUCTIVE));
+                                
+                                ui.add_space(20.0);
+
+                                ui.horizontal(|ui| {
+                                    let btn_delete = ui.add_sized(
+                                        [120.0, 24.0],
+                                        egui::Button::new(egui::RichText::new("🗑 YES, DELETE").strong())
+                                            .fill(crate::theme::DESTRUCTIVE)
+                                            .stroke(egui::Stroke::NONE)
+                                    );
+                                    if btn_delete.clicked() {
+                                        let _ = self.project_manager.delete_project(idx);
+                                        self.deleting_project_idx = None;
+                                    }
+                                    if ui.add_sized([80.0, 24.0], egui::Button::new("CANCEL")).clicked() {
+                                        self.deleting_project_idx = None;
+                                    }
+                                });
+                            });
+                        });
                 });
             if !open {
                 self.deleting_project_idx = None;
